@@ -1,30 +1,44 @@
 {
   "compilerOptions": {
-    "rootDir": ".",
-    "paths": {
-      "react-native-openai-realtime": ["./src/index"]
-    },
-    "allowUnreachableCode": false,
-    "allowUnusedLabels": false,
-    "customConditions": ["react-native-strict-api"],
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "jsx": "react-jsx",
-    "lib": ["ESNext"],
+    "target": "ES2019",
+    "lib": ["ES2019", "DOM", "DOM.Iterable"],
+
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "noEmit": true,
-    "noFallthroughCasesInSwitch": true,
-    "noImplicitReturns": true,
-    "noImplicitUseStrict": false,
-    "noStrictGenericChecks": false,
-    "noUncheckedIndexedAccess": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "resolveJsonModule": true,
-    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "customConditions": ["react-native"],
+
+    "jsx": "react-jsx",
+
     "strict": true,
-    "target": "ESNext",
-    "verbatimModuleSyntax": true
-  }
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "useDefineForClassFields": false,
+    "sourceMap": true,
+
+    "declaration": true,
+    "noEmit": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@react-native-openai-realtime/*": ["./src/*"]
+    },
+
+    "types": ["react", "react-native"]
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "lib",
+    "node_modules",
+    "example",
+    "scripts",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ]
 }

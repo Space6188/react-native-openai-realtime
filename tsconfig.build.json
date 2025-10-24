@@ -1,4 +1,26 @@
 {
-  "extends": "./tsconfig",
-  "exclude": ["example", "lib"]
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": false,
+    "sourceMap": false,
+
+    "baseUrl": ".",
+    "paths": {
+      "@react-native-openai-realtime/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "lib",
+    "example",
+    "**/__tests__",
+    "**/__fixtures__",
+    "**/__mocks__",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ]
 }
