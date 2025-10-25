@@ -1,7 +1,8 @@
 import type { RTCOfferOptions } from 'react-native-webrtc/lib/typescript/RTCUtil';
-import { VOICE_IDS } from '../helpers/voice';
-import { ResponseCreateParams } from './Responce';
-import { Constraints } from './Constraints';
+import { VOICE_IDS } from '@react-native-openai-realtime/helpers/voice';
+import { ResponseCreateParams } from '@react-native-openai-realtime/types/Responce';
+import { Constraints } from '@react-native-openai-realtime/types/Constraints';
+import { RealtimeClient } from '@react-native-openai-realtime/components/RealtimeClientClass';
 
 export type RTCIceServer = {
   credential?: string;
@@ -73,7 +74,7 @@ export type RealtimeClientHooks = {
 export type MiddlewareCtx = {
   event: any;
   send: (e: any) => void | Promise<void>;
-  client: any;
+  client: RealtimeClient | null;
 };
 export type IncomingMiddleware = (
   ctx: MiddlewareCtx
@@ -134,6 +135,7 @@ export type RealtimeClientOptions = {
 // Для чата (используется в ChatStore/ChatAdapter)
 export type ChatMsg = {
   id: string;
+  time: number;
   role: 'user' | 'assistant';
   text: string;
   ts: number;

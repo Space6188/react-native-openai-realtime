@@ -1,4 +1,3 @@
-// src/helpers/voice.ts
 export const VOICE_IDS = [
   'verse',
   'alloy',

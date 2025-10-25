@@ -1,4 +1,4 @@
-import type { RealtimeClientOptions } from '../types';
+import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
 
 type Emitter = (type: string, payload?: any) => void;
 

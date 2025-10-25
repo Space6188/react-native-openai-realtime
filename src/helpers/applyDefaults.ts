@@ -1,6 +1,6 @@
-import type { RealtimeClientOptions } from '../types';
-import { deepMerge } from './deepMerge';
-import { DEFAULTS } from '../constants/defaultOptions';
+import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
+import { deepMerge } from '@react-native-openai-realtime/helpers/deepMerge';
+import { DEFAULTS } from '@react-native-openai-realtime/constants/defaultOptions';
 
 export function applyDefaults(
   user: RealtimeClientOptions

@@ -1,4 +1,4 @@
-import type { RealtimeClientOptions } from '../types';
+import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
 
 export const DEFAULTS: RealtimeClientOptions = {
   // tokenProvider — обязателен, без него нельзя получить ephemeral token

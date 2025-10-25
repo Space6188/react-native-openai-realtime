@@ -18,4 +18,8 @@ export { MessageSender } from './managers/MessageSender';
 export { OpenAIApiClient } from './managers/OpenAIApiManager';
 export { PeerConnectionManager } from './managers/PeerConnectionManager';
 export { useMicrophoneActivity } from './hooks/useMicrophoneActivity';
+export {
+  useSpeechActivity,
+  createSpeechActivityMiddleware,
+} from './middlewares/speachMiddleware';
 export { DEFAULTS as DEFAULT_OPTIONS } from './constants/defaultOptions';

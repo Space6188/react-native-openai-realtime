@@ -22,11 +22,11 @@
   ],
   "scripts": {
     "example": "npm --prefix example run",
-    "test": "jest",
+    "test": "jest --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "clean": "del-cli lib",
-    "prepare": "bob build",
+    "prepare": "bob build && node ./scripts/fix-aliases.js",
     "release": "release-it --only-version"
   },
   "keywords": [
@@ -68,6 +68,7 @@
     "@types/jest": "^29.5.14",
     "@types/react": "^19.1.12",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
+    "babel-plugin-module-resolver": "^5.0.2",
     "commitlint": "^19.8.1",
     "del-cli": "^6.0.0",
     "eslint": "^8.57.1",
@@ -82,6 +83,7 @@
     "react-native": "0.81.5",
     "react-native-builder-bob": "^0.40.13",
     "release-it": "^19.0.4",
+    "tsc-alias": "^1.8.16",
     "typescript": "^5.9.2"
   },
   "peerDependencies": {
@@ -93,7 +95,10 @@
     "modulePathIgnorePatterns": [
       "<rootDir>/example/node_modules",
       "<rootDir>/lib/"
-    ]
+    ],
+    "moduleNameMapper": {
+      "^@react-native-openai-realtime/(.*)$": "<rootDir>/src/$1"
+    }
   },
   "commitlint": {
     "extends": [
@@ -133,7 +138,9 @@
       [
         "module",
         {
-          "esm": true
+          "esm": true,
+          "babelrc": false,
+          "configFile": false
         }
       ],
       [

@@ -1,5 +1,6 @@
 import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
 import { createDefaultRouter } from '@react-native-openai-realtime/helpers/createDefaultRouter';
+import type { RealtimeClient } from '@react-native-openai-realtime/components/RealtimeClientClass';
 
 type Listener = (payload: any) => void;
 
@@ -29,7 +30,10 @@ export class EventRouter {
     );
   }
 
-  setContext(client: any, sendRaw: (e: any) => Promise<void>) {
+  setContext(
+    client: RealtimeClient | null,
+    sendRaw: (e: any) => Promise<void>
+  ) {
     this.clientRef = client;
     this.sendRef = sendRaw;
   }

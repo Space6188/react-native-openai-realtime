@@ -1,4 +1,5 @@
-import type { ChatMsg } from '../types';
+// src/adapters/ChatStore.ts
+import type { ChatMsg } from '@react-native-openai-realtime/types';
 
 type Side = 'user' | 'assistant';
 type Listener = (chat: ChatMsg[]) => void;
@@ -25,10 +26,12 @@ export class ChatStore {
   get() {
     return this.chat;
   }
+
   subscribe(fn: Listener) {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
+
   private emit() {
     const snap = this.chat.slice();
     this.listeners.forEach((fn) => fn(snap));
@@ -37,6 +40,7 @@ export class ChatStore {
   private orderBy(side: Side) {
     return side === 'user' ? this.userOrderRef : this.respOrderRef;
   }
+
   private stateBy(side: Side) {
     return side === 'user' ? this.userState : this.assistantState;
   }
@@ -45,27 +49,29 @@ export class ChatStore {
     this.userState.set(itemId, { inChat: false, hasText: false });
     this.userOrderRef.set(itemId, ++this.seqRef);
   }
+
   startAssistant(responseId: string) {
     this.assistantState.set(responseId, { inChat: false, hasText: false });
     this.respOrderRef.set(responseId, ++this.seqRef);
   }
 
   putDelta(side: Side, id: string, delta: string) {
-    if (!id || !delta) {
-      return;
-    }
+    if (!id || !delta) return;
+
     const store = this.stateBy(side);
     const st = store.get(id) || { inChat: false, hasText: false };
     const ts0 = this.orderBy(side).get(id) ?? Date.now();
 
     if (!st.inChat) {
-      const msg: ChatMsg = {
+      const now = Date.now();
+      const msg: ChatMsg & { time: number } = {
         id,
         itemId: side === 'user' ? id : undefined,
         responseId: side === 'assistant' ? id : undefined,
         role: side,
         text: delta,
-        ts: ts0,
+        ts: ts0, // порядковый номер/seq
+        time: now, // время первого появления в чате
         status: 'streaming',
       };
       this.chat = [...this.chat, msg];
@@ -76,6 +82,7 @@ export class ChatStore {
         return match ? { ...m, text: (m.text || '') + delta } : m;
       });
     }
+
     st.hasText = true;
     store.set(id, st);
     this.emit();
@@ -93,15 +100,18 @@ export class ChatStore {
     const idx = this.chat.findIndex((m) =>
       side === 'user' ? m.itemId === id : m.responseId === id
     );
+
     if (idx === -1) {
       if (side === 'user' && finalText && this.isMeaningful(finalText)) {
         const ts0 = this.orderBy(side).get(id) ?? Date.now();
-        const msg: ChatMsg = {
+        const now = Date.now();
+        const msg: ChatMsg & { time: number } = {
           id,
           itemId: id,
           role: 'user',
           text: finalText,
           ts: ts0,
+          time: now, // время появления (если сообщение пришло только на finalize)
           status: 'done',
         };
         this.chat = [...this.chat, msg];
@@ -109,8 +119,10 @@ export class ChatStore {
       }
       return;
     }
+
     const msg = this.chat[idx];
     const text = finalText ?? msg?.text ?? '';
+
     if (!this.isMeaningful(text)) {
       const copy = [...this.chat];
       copy.splice(idx, 1);
@@ -118,7 +130,9 @@ export class ChatStore {
       this.emit();
       return;
     }
+
     const copy = [...this.chat];
+    // time НЕ меняем — оно фиксирует момент первого добавления
     copy[idx] = { ...msg!, text, status };
     this.chat = copy;
     this.emit();
