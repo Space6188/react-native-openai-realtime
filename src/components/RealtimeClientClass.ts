@@ -7,7 +7,6 @@ import { ErrorHandler } from '@react-native-openai-realtime/handlers/error';
 import { SuccessHandler } from '@react-native-openai-realtime/handlers/success';
 import { applyDefaults } from '@react-native-openai-realtime/helpers/applyDefaults';
 import { ChatStore } from '@react-native-openai-realtime/adapters/ChatStore';
-
 import { PeerConnectionManager } from '@react-native-openai-realtime/managers/PeerConnectionManager';
 import { MediaManager } from '@react-native-openai-realtime/managers/MediaManager';
 import { DataChannelManager } from '@react-native-openai-realtime/managers/DataChannelManager';

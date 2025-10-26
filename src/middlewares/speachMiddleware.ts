@@ -1,9 +1,18 @@
-import type {
-  SpeechActivityState,
-  Listener,
-} from '@react-native-openai-realtime/types/Speach';
+// src/activity/speechActivity.ts
 import { useEffect, useState } from 'react';
 import { MiddlewareCtx } from 'react-native-openai-realtime';
+
+// Простое хранилище с подпиской
+export type SpeechActivityState = {
+  isUserSpeaking: boolean;
+  isAssistantSpeaking: boolean;
+  inputBuffered: boolean;
+  outputBuffered: boolean;
+  lastUserEventAt: number | null;
+  lastAssistantEventAt: number | null;
+};
+
+type Listener = (s: SpeechActivityState) => void;
 
 class SpeechActivityStore {
   private state: SpeechActivityState = {
@@ -86,7 +95,6 @@ export function createSpeechActivityMiddleware(store = speechActivityStore) {
     ) {
       store.setUserSpeaking(true);
       store.setAssistantSpeaking(false);
-      store.setOutputBuffered(false);
     }
     if (
       isType(event, 'input_audio_buffer.speech_stopped') ||
@@ -138,6 +146,7 @@ export function createSpeechActivityMiddleware(store = speechActivityStore) {
   };
 }
 
+// React-хук: подписка на store
 export function useSpeechActivity(store = speechActivityStore) {
   const [state, setState] = useState<SpeechActivityState>(() => store.get());
   useEffect(() => store.subscribe(setState) as any, [store]);

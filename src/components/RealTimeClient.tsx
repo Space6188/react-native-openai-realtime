@@ -8,9 +8,13 @@ import { attachChatAdapter } from '@react-native-openai-realtime/adapters/ChatAd
 import {
   RealtimeProvider,
   type RealtimeContextValue,
+  type AddableMessage,
+  type ExtendedChatMsg,
 } from '@react-native-openai-realtime/context/RealtimeContext';
 import type { RealTimeClientProps } from '@react-native-openai-realtime/types/RealtimeClient';
 import { prune } from '@react-native-openai-realtime/helpers/prune';
+
+const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export const RealTimeClient: FC<RealTimeClientProps> = ({
   tokenProvider,
@@ -45,7 +49,12 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
 
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+
+  // Базовый чат из встроенного ChatStore
   const [chat, setChat] = useState<ChatMsg[]>([]);
+
+  // NEW: локальные добавленные сообщения (UI и др.)
+  const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
   // Собираем RealtimeClientOptions только из верхнеуровневых пропсов
   const clientOptions: RealtimeClientOptions = useMemo(() => {
@@ -160,6 +169,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       clientRef.current = null;
       setIsConnected(false);
       setChat([]);
+      setAddedMessages([]); // NEW: очищаем локальные сообщения при дисконнекте
     }
   };
 
@@ -172,12 +182,62 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // NEW: нормализация входящих addMessage
+  const normalize = useCallback((m: AddableMessage): ExtendedChatMsg => {
+    const base = {
+      id: m.id ?? makeId(),
+      role: m.role ?? 'assistant',
+      ts: m.ts ?? Date.now(),
+    };
+
+    // UI-сообщение
+    if (
+      (m as any).type === 'ui' ||
+      ('kind' in (m as any) && 'payload' in (m as any))
+    ) {
+      return {
+        ...base,
+        type: 'ui',
+        kind: (m as any).kind,
+        payload: (m as any).payload,
+      } as ExtendedChatMsg;
+    }
+
+    // Текстовое сообщение (по умолчанию)
+    return {
+      ...base,
+      type: 'text',
+      text: (m as any).text ?? '',
+    } as unknown as ExtendedChatMsg;
+  }, []);
+
+  // NEW: публичные методы
+  const addMessage = useCallback(
+    (m: AddableMessage | AddableMessage[]) => {
+      const arr = Array.isArray(m) ? m : [m];
+      const normalized = arr.map(normalize);
+      setAddedMessages((prev) => [...prev, ...normalized]);
+      const ids = normalized.map((x) => (x as any).id as string);
+      return Array.isArray(m) ? ids : ids[0];
+    },
+    [normalize]
+  );
+
+  const clearAdded = useCallback(() => setAddedMessages([]), []);
+
+  // NEW: объединяем системный чат и локальные сообщения
+  const mergedChat = useMemo<ExtendedChatMsg[]>(() => {
+    const merged = [...(chat ?? []), ...addedMessages];
+    // Сортируем по возрастанию ts (как в твоём UI)
+    return merged.sort((a: any, b: any) => (a.ts ?? 0) - (b.ts ?? 0));
+  }, [chat, addedMessages]);
+
   const value: RealtimeContextValue = useMemo(
     () => ({
       client,
       isConnected,
       isConnecting,
-      chat,
+      chat: mergedChat,
       connect,
       disconnect,
       sendResponse: (opts?: any) => client.sendResponse(opts),
@@ -188,8 +248,20 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       }) => client.sendResponseStrict(opts),
       updateSession: (patch: Partial<any>) => client.updateSession(patch),
       sendRaw: (e: any) => client.sendRaw(e),
+
+      // NEW:
+      addMessage,
+      clearAdded,
     }),
-    [client, isConnected, isConnecting, chat, connect]
+    [
+      client,
+      isConnected,
+      isConnecting,
+      mergedChat,
+      connect,
+      addMessage,
+      clearAdded,
+    ]
   );
 
   const renderedChildren =
