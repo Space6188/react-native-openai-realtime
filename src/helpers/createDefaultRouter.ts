@@ -1,15 +1,16 @@
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
 
 type Emitter = (type: string, payload?: any) => void;
 
 export function createDefaultRouter(
   emit: Emitter,
-  options: RealtimeClientOptions,
+  options: RealtimeClientOptionsBeforePrune,
   functionArgsBuffer: Map<string, string>,
   sendRaw: (e: any) => void
 ) {
   return async function route(msg: any) {
     const hooks = options.hooks;
+    hooks?.onEvent?.(msg);
 
     // User created
     if (msg.type === 'conversation.item.created' && msg.item?.role === 'user') {
@@ -194,7 +195,5 @@ export function createDefaultRouter(
       options.hooks?.onError?.(msg.error);
       return;
     }
-
-    options.hooks?.onEvent?.(msg);
   };
 }

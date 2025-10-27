@@ -1,18 +1,8 @@
-// src/activity/speechActivity.ts
-import { useEffect, useState } from 'react';
-import { MiddlewareCtx } from 'react-native-openai-realtime';
-
-// Простое хранилище с подпиской
-export type SpeechActivityState = {
-  isUserSpeaking: boolean;
-  isAssistantSpeaking: boolean;
-  inputBuffered: boolean;
-  outputBuffered: boolean;
-  lastUserEventAt: number | null;
-  lastAssistantEventAt: number | null;
-};
-
-type Listener = (s: SpeechActivityState) => void;
+import type {
+  MiddlewareCtx,
+  SpeechActivityState,
+  Listener,
+} from '@react-native-openai-realtime/types';
 
 class SpeechActivityStore {
   private state: SpeechActivityState = {
@@ -80,7 +70,7 @@ class SpeechActivityStore {
 }
 
 export const speechActivityStore = new SpeechActivityStore();
-
+export type SpeechActivityStoreType = typeof speechActivityStore;
 // Утилита: безопасное сравнение типа события
 const isType = (evt: any, type: string) => evt?.type === type;
 
@@ -147,8 +137,3 @@ export function createSpeechActivityMiddleware(store = speechActivityStore) {
 }
 
 // React-хук: подписка на store
-export function useSpeechActivity(store = speechActivityStore) {
-  const [state, setState] = useState<SpeechActivityState>(() => store.get());
-  useEffect(() => store.subscribe(setState) as any, [store]);
-  return state;
-}

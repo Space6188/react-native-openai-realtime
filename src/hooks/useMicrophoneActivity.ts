@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { useRealtime } from '@react-native-openai-realtime/context/RealtimeContext';
-import type { RealtimeClient } from '@react-native-openai-realtime/components/RealtimeClientClass';
+import { useRealtime } from '@react-native-openai-realtime/hooks';
+import type { RealtimeClient } from '@react-native-openai-realtime/components';
 
 type Mode = 'server' | 'stats' | 'auto';
 

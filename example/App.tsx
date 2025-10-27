@@ -1,327 +1,527 @@
-// example/FullDemo.tsx
-import {useMemo} from 'react';
+import React, {FC, useCallback, useEffect, useState, useMemo} from 'react';
 import {
   SafeAreaView,
   View,
   Text,
-  TouchableOpacity,
-  ScrollView,
   StyleSheet,
+  TouchableOpacity,
+  FlatList,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  Button,
+  ScrollView,
 } from 'react-native';
-import {RealTimeClient} from '@react-native-openai-realtime/components/RealtimeClientClass'; // или откуда экспортируешь
+
+// ===== 1. КОРРЕКТНЫЕ ИМПОРТЫ ИЗ БИБЛИОТЕКИ =====
+import {
+  RealTimeClient,
+  useRealtime,
+  useSpeechActivity,
+  useMicrophoneActivity,
+  createSpeechActivityMiddleware,
+  speechActivityStore,
+} from '@react-native-openai-realtime';
+
 import type {
-  RealtimeClientOptions,
-  ChatMsg,
+  MiddlewareCtx,
+  ExtendedChatMsg,
+  IncomingMiddleware,
+  OutgoingMiddleware,
 } from '@react-native-openai-realtime/types';
-import {useRealtime} from '@react-native-openai-realtime/context/RealtimeContext';
 
-const SERVER_BASE = 'http://localhost:8787';
+// ====================================================================================
+// 2. БЕЗОПАСНЫЙ TOKEN PROVIDER
+// ====================================================================================
 
-// Более "умный" предикат осмысленности.
-// Отсекает пустое, чистую пунктуацию/эмодзи, короткие междометия.
-function isMeaningfulText(t: string): boolean {
-  if (!t) {
-    return false;
+const tokenProvider = async (): Promise<string> => {
+  console.log('🔑 [tokenProvider] Запрашиваем эфемерный токен с бэкенда...');
+  try {
+    const backendUrl = 'http://localhost:3000/api/openai/ephemeral-token';
+    const userAuthToken = 'YOUR_APP_USER_JWT_OR_SESSION_TOKEN';
+
+    const response = await fetch(backendUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${userAuthToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ошибка получения токена (статус: ${response.status})`);
+    }
+    const {token} = await response.json();
+    if (!token) {
+      throw new Error('Сервер вернул пустой токен');
+    }
+
+    console.log('✅ [tokenProvider] Токен успешно получен.');
+    return token;
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+    console.error(
+      '❌ [tokenProvider] Не удалось получить токен:',
+      errorMessage,
+    );
+    Alert.alert(
+      'Ошибка сети',
+      `Не удалось подключиться к серверу для получения токена. Убедитесь, что сервер запущен.\n\n${errorMessage}`,
+    );
+    throw error;
   }
-  const s = t.replace(/\p{Z}+/gu, ' ').trim(); // нормализуем пробелы (unicode)
-  if (!s) {
-    return false;
-  }
+};
 
-  // убрать всё, кроме букв/цифр — осталось ли хоть что-то "содержательное"?
-  const lettersDigits = s.replace(/[^\p{L}\p{N}]+/gu, '');
-  if (lettersDigits.length < 2) {
-    return false;
-  }
+// ====================================================================================
+// 3. MIDDLEWARE: ГИБКИЙ ПЕРЕХВАТ И МОДИФИКАЦИЯ
+// ====================================================================================
 
-  // короткие "междометия" и шум
-  if (
-    /^(эм+|мм+|ээ+|угу+|ага+|uh+|um+|er+|h+mm+|hm+|\.+|…+|—+|-+|!+|\?+)$/iu.test(
-      s,
-    )
-  ) {
-    return false;
-  }
-  return true;
-}
-
-// Входящий middleware — пример:
-// 1) съедаем неосмысленные крошечные дельты ассистента, чтобы не моргал "…"
-// 2) можем модифицировать ивент (вернув новый объект)
-const incomingFilters = [
-  async ({event}: any) => {
+const createIncomingMiddleware = (
+  log: (msg: string) => void,
+): IncomingMiddleware[] => [
+  createSpeechActivityMiddleware(speechActivityStore),
+  ({event}: MiddlewareCtx) => {
+    log(`[IN] ${event.type}`);
     if (
-      event?.type === 'response.output_text.delta' ||
-      event?.type === 'response.audio_transcript.delta'
+      event.type === 'response.audio_transcript.delta' &&
+      !(event.delta || '').trim()
     ) {
-      const delta = event.delta || '';
-      // если дельта не осмыслена и очень короткая — съедаем
-      if (!isMeaningfulText(delta) && delta.length < 2) {
-        return 'stop';
-      }
+      return 'stop';
     }
-    return;
-  },
-  // пример трансформа: добавим свой "канал" в метаданные для отладки
-  ({event}: any) => {
-    if (event && typeof event === 'object') {
-      return {...event, _source: 'incoming-mw'};
-    }
-    return;
   },
 ];
 
-// Исходящий middleware — пример:
-// 1) для response.create подставим модальности по умолчанию, если не указаны
-// 2) логгер исходящих событий (или A/B-теги)
-const outgoingFilters = [
+const createOutgoingMiddleware = (
+  log: (msg: string) => void,
+): OutgoingMiddleware[] => [
   (event: any) => {
-    if (event?.type === 'response.create') {
-      const resp = event.response ?? {};
-      if (!resp.modalities || resp.modalities.length === 0) {
-        event = {...event, response: {...resp, modalities: ['audio', 'text']}};
-      }
-    }
-    return event;
-  },
-  (event: any) => {
-    // консоль для примера (в проде можно свой logger)
-    // console.log('[OUT]', event?.type);
-    return event;
+    log(`[OUT] ${event.type}`);
+    return {
+      ...event,
+      client_metadata: {appVersion: '1.0.0', platform: Platform.OS},
+    };
   },
 ];
 
-function ChatUI() {
+// ====================================================================================
+// 4. UI КОМПОНЕНТЫ ДЛЯ ДЕМОНСТРАЦИИ
+// ====================================================================================
+
+const MicrophoneVisualizer: FC = () => {
+  const mic = useMicrophoneActivity({mode: 'auto', pollInterval: 100});
+  const bars = useMemo(
+    () =>
+      Array.from({length: 20}, (_, i) => {
+        const isActive = mic.level >= (i + 1) / 20;
+        return (
+          <View
+            key={i}
+            style={[
+              styles.micBar,
+              // eslint-disable-next-line react-native/no-inline-styles
+              {
+                height: 10 + i * 1.5,
+                backgroundColor: isActive
+                  ? `hsl(${120 - i * 6}, 70%, 50%)`
+                  : '#e9ecef',
+              },
+            ]}
+          />
+        );
+      }),
+    [mic.level],
+  );
+  return (
+    <View style={styles.micVisualizer}>
+      <Text style={styles.micTitle}>
+        {mic.isMicActive ? '🎤 Запись...' : '🔇 Тишина'}
+      </Text>
+      <View style={styles.micBars}>{bars}</View>
+    </View>
+  );
+};
+
+const ChatMessage: FC<{item: ExtendedChatMsg}> = ({item}) => {
+  if (item.type === 'ui' && item.kind === 'weather_card') {
+    return (
+      <View style={[styles.bubble, styles.weatherCard]}>
+        <Text style={styles.weatherIcon}>☀️</Text>
+        <View>
+          <Text style={styles.weatherCity}>{item.payload.city}</Text>
+          <Text style={styles.weatherTemp}>{item.payload.temperature}</Text>
+        </View>
+      </View>
+    );
+  }
+  const isUser = item.role === 'user';
+  return (
+    <View
+      style={[
+        styles.bubble,
+        isUser ? styles.userBubble : styles.assistantBubble,
+      ]}>
+      <Text style={isUser ? styles.userText : styles.assistantText}>
+        {item.text}
+      </Text>
+      {item.status === 'streaming' && (
+        // eslint-disable-next-line react-native/no-inline-styles
+        <ActivityIndicator size="small" style={{marginLeft: 8}} />
+      )}
+    </View>
+  );
+};
+
+const MainScreen: FC<{addLog: (msg: string) => void}> = ({addLog}) => {
   const {
-    chat,
+    client,
     isConnected,
     isConnecting,
+    chat,
     connect,
     disconnect,
-    sendResponseStrict,
+    sendResponse,
+    updateSession,
+    addMessage,
   } = useRealtime();
+  const {isUserSpeaking, isAssistantSpeaking} = useSpeechActivity();
+
+  useEffect(() => {
+    if (!client) {
+      return;
+    }
+    const unsub = client.on('tool:call_done', ({name, args}) => {
+      addLog(`🔧 Tool executed: ${name}`);
+      if (name === 'get_weather') {
+        addMessage({type: 'ui', kind: 'weather_card', payload: args});
+      }
+    });
+    return unsub;
+  }, [client, addMessage, addLog]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Realtime — Full Example</Text>
-      </View>
-
-      <ScrollView contentContainerStyle={styles.chat}>
-        {[...chat]
-          .sort((a: ChatMsg, b: ChatMsg) => a.ts - b.ts)
-          .map((m: ChatMsg) => (
-            <View
-              key={m.id}
-              style={[
-                styles.bubble,
-                m.role === 'assistant' ? styles.left : styles.right,
-                m.status === 'canceled' && styles.bubbleCanceled,
-              ]}>
-              <Text style={styles.role}>
-                {m.role === 'assistant' ? 'Ассистент' : 'Вы'}
-              </Text>
-              <Text style={styles.text}>{m.text}</Text>
-              {m.status === 'streaming' && (
-                <Text style={styles.hint}>печатает…</Text>
-              )}
-              {m.status === 'canceled' && (
-                <Text style={styles.hint}>прервано</Text>
-              )}
-            </View>
-          ))}
-      </ScrollView>
-
-      <View style={styles.controls}>
+        <Text style={styles.title}>Realtime Demo</Text>
         <TouchableOpacity
-          style={[styles.btn, isConnected && styles.btnRed]}
-          onPress={isConnected ? disconnect : connect}
+          style={[styles.connectButton, isConnected && styles.connectedButton]}
+          onPress={() => (isConnected ? disconnect() : connect())}
           disabled={isConnecting}>
-          <Text style={styles.btnText}>
-            {isConnecting
-              ? 'Подключение...'
-              : isConnected
-                ? 'Отключить'
-                : 'Подключить'}
+          <Text style={styles.connectButtonText}>
+            {isConnecting ? '...' : isConnected ? 'Online' : 'Offline'}
           </Text>
         </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.btn, styles.btnAlt]}
-          onPress={() =>
-            sendResponseStrict?.({
-              instructions:
-                'Скажи одно короткое предложение о том, что ты умеешь.',
-              modalities: ['text'],
-            })
-          }
-          disabled={!isConnected}>
-          <Text style={styles.btnText}>Спросить текстом</Text>
-        </TouchableOpacity>
       </View>
-    </SafeAreaView>
+      <View style={styles.activityIndicators}>
+        <Text
+          style={[
+            styles.indicatorText,
+            isUserSpeaking && styles.activeIndicator,
+          ]}>
+          User Speaking
+        </Text>
+        <Text
+          style={[
+            styles.indicatorText,
+            isAssistantSpeaking && styles.activeIndicator,
+          ]}>
+          Assistant Speaking
+        </Text>
+      </View>
+      <MicrophoneVisualizer />
+      <FlatList
+        style={styles.chatList}
+        data={chat}
+        renderItem={ChatMessage}
+        keyExtractor={item => item.id}
+        inverted
+      />
+      {isConnected && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.controls}>
+          <Button
+            title="Погода"
+            onPress={() => sendResponse({instructions: 'Погода в Париже'})}
+          />
+          <Button
+            title="Голос"
+            onPress={() => updateSession({voice: 'onyx'})}
+          />
+          <Button
+            title="Mute"
+            onPress={() =>
+              client
+                ?.getLocalStream()
+                ?.getAudioTracks()
+                .forEach(t => (t.enabled = false))
+            }
+          />
+          <Button
+            title="Unmute"
+            onPress={() =>
+              client
+                ?.getLocalStream()
+                ?.getAudioTracks()
+                .forEach(t => (t.enabled = true))
+            }
+          />
+        </ScrollView>
+      )}
+    </View>
   );
-}
+};
 
-export default function FullDemo() {
-  const options: RealtimeClientOptions = useMemo(
-    () => ({
-      tokenProvider: async () => {
-        const r = await fetch(`${SERVER_BASE}/realtime/session`);
-        if (!r.ok) {
-          throw new Error(`Token fetch failed: ${r.status}`);
-        }
-        const j = await r.json();
-        return j.client_secret.value;
-      },
+// ====================================================================================
+// 5. КОРНЕВОЙ КОМПОНЕНТ С ПОЛНОЙ КОНФИГУРАЦИЕЙ
+// ====================================================================================
 
-      // Сессия: VAD+STT+модальности
-      session: {
-        input_audio_transcription: {
-          model: 'gpt-4o-mini-transcribe',
-          language: 'ru',
-        },
-        modalities: ['audio', 'text'],
-        // voice здесь можно не повторять — он авто-переносится из options.voice
-      },
+const TheUltimateExample: FC = () => {
+  const [_, setLogs] = useState<string[]>([]);
+  const addLog = useCallback((msg: string) => {
+    setLogs(prev => [
+      `[${new Date().toLocaleTimeString()}] ${msg}`,
+      ...prev.slice(0, 100),
+    ]);
+  }, []);
 
-      // Глобальная политика осмысленности (используем в middleware/хуках)
-      policy: {
-        isMeaningfulText,
-      },
-
-      // Встроенный чат: включен, правило осмысленности — такое же как глобально
-      chat: {
-        enabled: true,
-        isMeaningfulText,
-      },
-
-      // Автоконфиг в onopen: session.update + приветствие
-      autoSessionUpdate: true,
-      greet: {
-        enabled: true,
-        response: {
-          instructions:
-            'Привет! Я голосовой ассистент. Спросите о подборе специалиста.',
-          modalities: ['audio', 'text'],
-        },
-      },
-
-      // Хуки
-      hooks: {
-        // onAssistantTextDelta: ({responseId, delta, channel}) => {
-        //   console.log('AI+', channel, delta, responseId);
-        // },
-        // onAssistantCompleted: ({responseId, status}) => {
-        //   console.log('AI done:', responseId, status);
-        // },
-        // onUserTranscriptionDelta: ({itemId, delta}) => {
-        //   console.log('USER+', delta, itemId);
-        // },
-        onToolCall: async ({name, args}) => {
-          if (name !== 'search_professionals') {
-            return;
-          }
-          // Пример: дергаем ваш бэкенд
-          const resp = await fetch(`${SERVER_BASE}/api/search`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(args),
-          });
-          const data = await resp.json();
-          // вернем объект — клиент сам отправит function_call_output и запросит следующий ответ
-          return {
-            count: (data.items || []).length,
-            examples: (data.items || [])
-              .slice(0, 3)
-              .map((x: any) => ({id: x.id, name: x.name, years: x.years})),
-          };
-        },
-        onError: e => {
-          console.warn('Realtime error:', e);
-        },
-      },
-
-      // Middleware
-      middleware: {
-        incoming: incomingFilters,
-        outgoing: outgoingFilters,
-      },
-
-      // Логгер (по желанию)
-      logger: {
-        info: (...a) => console.log('[INFO]', ...a),
-        debug: (...a) => console.log('[DEBUG]', ...a),
-        warn: (...a) => console.log('[WARN]', ...a),
-        error: (...a) => console.log('[ERROR]', ...a),
-      },
-    }),
-    [],
+  const memoizedIncomingMiddleware = useMemo(
+    () => createIncomingMiddleware(addLog),
+    [addLog],
+  );
+  const memoizedOutgoingMiddleware = useMemo(
+    () => createOutgoingMiddleware(addLog),
+    [addLog],
   );
 
   return (
-    <RealTimeClient
-      options={options}
-      autoConnect={false} // автоконнект выключим — кнопкой будем управлять
-      attachChat={true} // подключаем ChatAdapter, чат придёт в useRealtime().chat
-    >
-      <ChatUI />
-    </RealTimeClient>
+    <SafeAreaView style={styles.safeArea}>
+      <RealTimeClient
+        // ----- 1. БАЗОВЫЕ НАСТРОЙКИ -----
+        tokenProvider={tokenProvider}
+        autoConnect={false}
+        attachChat={true}
+        // ----- 2. КОНФИГУРАЦИЯ WEBRTC -----
+        webrtc={{
+          iceServers: [{urls: 'stun:stun.l.google.com:19302'}],
+          offerOptions: {offerToReceiveAudio: true},
+        }}
+        // ----- 3. КОНФИГУРАЦИЯ СЕССИИ OPENAI -----
+        session={{
+          model: 'gpt-4o-realtime-preview-2024-12-17',
+          voice: 'alloy',
+          language: 'ru',
+          tools: [
+            // ✅ ПРАВИЛЬНАЯ "ПЛОСКАЯ" СХЕМА TOOLS
+            {
+              type: 'function',
+              name: 'get_weather',
+              description: 'Получает текущую погоду для указанного города.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  city: {type: 'string'},
+                  temperature: {type: 'string'},
+                  condition: {type: 'string'},
+                },
+                required: ['city', 'temperature', 'condition'],
+              },
+            },
+          ],
+        }}
+        autoSessionUpdate={true}
+        // ----- 4. ПОВЕДЕНИЕ ЧАТА -----
+        chatEnabled={true}
+        chatUserAddOnDelta={true}
+        chatAssistantAddOnDelta={true}
+        policyIsMeaningfulText={text => text.trim().length > 1}
+        chatIsMeaningfulText={text => text.trim().length > 0}
+        // ----- 5. ХУКИ ЖИЗНЕННОГО ЦИКЛА -----
+        onOpen={dc => addLog(`✅ [onOpen] DataChannel "${dc.label}" открыт.`)}
+        onEvent={evt => addLog(`[onEvent] Событие после MW: ${evt.type}`)}
+        onError={e => {
+          addLog(`❌ [onError] ${e.stage}: ${e.error.message}`);
+          Alert.alert('Ошибка', e.error.message);
+        }}
+        onToolCall={async ({name, args}) => {
+          addLog(`🔧 [onToolCall] Вызов инструмента: ${name}`);
+          if (name === 'get_weather') {
+            await new Promise(r => setTimeout(r, 500)); // Симуляция API
+            return {
+              city: args.city,
+              temperature: '25°C',
+              condition: 'Солнечно',
+            };
+          }
+        }}
+        // ----- 6. MIDDLEWARE -----
+        incomingMiddleware={memoizedIncomingMiddleware}
+        outgoingMiddleware={memoizedOutgoingMiddleware}>
+        <MainScreen addLog={addLog} />
+      </RealTimeClient>
+    </SafeAreaView>
   );
-}
+};
 
+export default TheUltimateExample;
+
+// ====================================================================================
+// 6. СТИЛИ И ФИНАЛЬНАЯ ШПАРГАЛКА
+// ====================================================================================
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: '#f5f5f5'},
+  safeArea: {flex: 1, backgroundColor: '#000'},
+  container: {flex: 1, backgroundColor: '#f0f2f5'},
   header: {
-    backgroundColor: '#fff',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: 16,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderColor: '#e0e0e0',
   },
-  title: {fontSize: 22, fontWeight: '700'},
-
-  chat: {padding: 12},
-  bubble: {maxWidth: '85%', padding: 10, borderRadius: 10, marginBottom: 8},
-  left: {
-    alignSelf: 'flex-start',
+  title: {fontSize: 20, fontWeight: 'bold'},
+  connectButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#dc3545',
+  },
+  connectedButton: {backgroundColor: '#28a745'},
+  connectButtonText: {color: '#fff', fontWeight: '600'},
+  activityIndicators: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    padding: 10,
     backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#eee',
   },
-  right: {alignSelf: 'flex-end', backgroundColor: '#DCF8C6'},
-  role: {fontSize: 10, color: '#888', marginBottom: 4},
-  text: {fontSize: 14, color: '#111'},
-  hint: {fontSize: 10, color: '#999', marginTop: 4},
-  bubbleCanceled: {opacity: 0.6},
-
-  controls: {
+  indicatorText: {fontSize: 14},
+  activeIndicator: {color: '#28a745', fontWeight: 'bold'},
+  micVisualizer: {
     padding: 12,
-    backgroundColor: '#fff',
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    gap: 10,
-  },
-  btn: {
-    backgroundColor: '#2196F3',
-    padding: 14,
+    backgroundColor: '#f8f9fa',
     borderRadius: 8,
+    margin: 10,
+  },
+  micTitle: {textAlign: 'center', marginBottom: 8, fontWeight: '600'},
+  micBars: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+    height: 40,
+  },
+  micBar: {width: 4, marginHorizontal: 1, borderRadius: 2},
+  chatList: {flex: 1},
+  bubble: {
+    padding: 12,
+    borderRadius: 18,
+    marginBottom: 8,
+    maxWidth: '80%',
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  btnRed: {backgroundColor: '#f44336'},
-  btnAlt: {backgroundColor: '#5C6BC0'},
-  btnText: {color: '#fff', fontWeight: '700'},
-
-  voiceRow: {flexDirection: 'row', alignItems: 'center', padding: 12, gap: 8},
-  voiceLabel: {fontWeight: '600'},
-  voiceChips: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
-  chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
+  userBubble: {alignSelf: 'flex-end', backgroundColor: '#007AFF'},
+  assistantBubble: {alignSelf: 'flex-start', backgroundColor: '#E5E5EA'},
+  userText: {color: '#FFF'},
+  assistantText: {color: '#000'},
+  weatherCard: {
+    alignSelf: 'center',
+    backgroundColor: '#d1ecf1',
     borderWidth: 1,
-    borderColor: '#bbb',
+    borderColor: '#bee5eb',
+    padding: 15,
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  chipActive: {backgroundColor: '#2196F3', borderColor: '#2196F3'},
-  chipText: {color: '#333'},
-  chipTextActive: {color: '#fff'},
+  weatherIcon: {fontSize: 32, marginRight: 12},
+  weatherCity: {fontSize: 18, fontWeight: 'bold'},
+  weatherTemp: {fontSize: 24},
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 10,
+    borderTopWidth: 1,
+    borderColor: '#e0e0e0',
+    backgroundColor: '#fff',
+  },
 });
+
+/*
+// ====================================================================================
+// 7. ЖИЗНЕННЫЙ ЦИКЛ ОБРАБОТКИ СОБЫТИЙ (ШПАРГАЛКА)
+// ====================================================================================
+
+// --- ВХОДЯЩЕЕ СОБЫТИЕ (от OpenAI к вам) ---
+// 1. Сообщение по DataChannel
+//     |
+//     v
+// 2. `incomingMiddleware` (Ваш код): Первый на перехват. МОЖЕТ изменить/заблокировать.
+//     |
+//     v
+// 3. `onEvent` хук (Ваш код): Только чтение. Для глобального логирования/аналитики.
+//     |
+//     v
+// 4. Внутренний роутер библиотеки: Парсит тип, вызывает `onToolCall` и другие `on...` хуки.
+//     |
+//     v
+// 5. Встроенный `ChatStore`: Обновляет `chat` на основе событий от роутера.
+//     |
+//     v
+// 6. Подписчики `client.on(...)`: Реакция UI на финальные, обработанные события.
+
+// --- ТРИ УРОВНЯ ОБРАБОТКИ ---
+// 1. Middleware: Максимальный контроль. Для трансформации, блокировки, сложной логики.
+// 2. Hooks (`on...`): Средний уровень. Для "потребления" событий и основной бизнес-логики (`onToolCall`).
+// 3. `client.on(...)`: Низкий уровень. Для реакции UI на финальные события.
+*/
+
+/**
+// ====================================================================================
+// 8. СЕРВЕРНАЯ ЧАСТЬ (Node.js/Express)
+// ====================================================================================
+ *
+ * Сохраните как `server.ts`, установите `express`, `cors`, `openai` и запустите:
+ * `npm i express cors openai`
+ * `OPENAI_API_KEY=sk-... ts-node server.ts`
+ *
+ * import express from 'express';
+ * import cors from 'cors';
+ * import { OpenAI } from 'openai';
+ *
+ * const app = express();
+ * app.use(cors());
+ * app.use(express.json());
+ *
+ * const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+ *
+ * // Простой rate-limit в памяти
+ * const rateLimit = new Map<string, number>();
+ * setInterval(() => rateLimit.clear(), 60000); // Очистка каждую минуту
+ *
+ * app.post('/api/openai/ephemeral-token', async (req, res) => {
+ *   const ip = req.ip || 'unknown';
+ *   const currentRequests = rateLimit.get(ip) || 0;
+ *   if (currentRequests > 20) {
+ *     return res.status(429).send('Too many requests');
+ *   }
+ *   rateLimit.set(ip, currentRequests + 1);
+ *
+ *   // Здесь должна быть проверка авторизации вашего пользователя
+ *   // const userToken = req.headers.authorization;
+ *   // if (!isValid(userToken)) return res.status(401).send('Unauthorized');
+ *
+ *   try {
+ *     // ВАЖНО: убедитесь, что ваш API ключ имеет права на создание ephemeral keys
+ *     // и ваш `issuing_organization` указан верно.
+ *     const ephemeralKey = await openai.ephemeralKeys.create({ issuing_organization: "YOUR_ORG_ID" });
+ *     res.json({ token: ephemeralKey.secret });
+ *   } catch (error) {
+ *     console.error(error);
+ *     res.status(500).json({ error: 'Failed to create ephemeral key' });
+ *   }
+ * });
+ *
+ * app.listen(3000, () => console.log('Token server running on port 3000'));
+ */

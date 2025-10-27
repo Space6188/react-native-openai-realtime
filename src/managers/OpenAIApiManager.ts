@@ -1,5 +1,5 @@
 // core/managers/OpenAIApiClient.ts
-import { ErrorHandler } from '@react-native-openai-realtime/handlers/error';
+import { ErrorHandler } from '@react-native-openai-realtime/handlers';
 
 export class OpenAIApiClient {
   private errorHandler: ErrorHandler;

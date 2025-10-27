@@ -1,24 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState, FC } from 'react';
-import type {
-  RealtimeClientOptions,
-  ChatMsg,
-} from '@react-native-openai-realtime/types';
-import { RealtimeClient } from '@react-native-openai-realtime/components/RealtimeClientClass';
-import { attachChatAdapter } from '@react-native-openai-realtime/adapters/ChatAdapter';
 import {
-  RealtimeProvider,
-  type RealtimeContextValue,
-  type AddableMessage,
-  type ExtendedChatMsg,
-} from '@react-native-openai-realtime/context/RealtimeContext';
-import type { RealTimeClientProps } from '@react-native-openai-realtime/types/RealtimeClient';
-import { prune } from '@react-native-openai-realtime/helpers/prune';
+  AddableMessage,
+  ChatMsg,
+  CoreConfig,
+  ExtendedChatMsg,
+  RealtimeClientOptionsBeforePrune,
+  RealTimeClientProps,
+  RealtimeContextValue,
+} from '@react-native-openai-realtime/types';
+import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RealtimeClient } from './RealtimeClientClass';
+import { attachChatAdapter } from '@react-native-openai-realtime/adapters';
+import { RealtimeProvider } from '@react-native-openai-realtime/context';
+import { prune } from '@react-native-openai-realtime/helpers';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export const RealTimeClient: FC<RealTimeClientProps> = ({
   tokenProvider,
-  voice,
   webrtc,
   media,
   session,
@@ -43,6 +41,10 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   autoConnect = true,
   attachChat = true,
   children,
+  chatUserAddOnDelta,
+  chatUserPlaceholderOnStart,
+  chatAssistantAddOnDelta,
+  chatAssistantPlaceholderOnStart,
 }) => {
   const clientRef = useRef<RealtimeClient | null>(null);
   const detachChatRef = useRef<null | (() => void)>(null);
@@ -57,10 +59,9 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
   // Собираем RealtimeClientOptions только из верхнеуровневых пропсов
-  const clientOptions: RealtimeClientOptions = useMemo(() => {
-    const topLevel: RealtimeClientOptions = prune({
+  const clientOptions: CoreConfig = useMemo(() => {
+    const topLevel: CoreConfig = prune({
       tokenProvider,
-      voice,
       webrtc,
       media,
       session,
@@ -95,14 +96,21 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       chat: prune({
         enabled: chatEnabled,
         isMeaningfulText: chatIsMeaningfulText,
+        userAddOnDelta: chatUserAddOnDelta,
+        userPlaceholderOnStart: chatUserPlaceholderOnStart,
+        assistantAddOnDelta: chatAssistantAddOnDelta,
+        assistantPlaceholderOnStart: chatAssistantPlaceholderOnStart,
       }),
       logger,
-    }) as RealtimeClientOptions;
+    }) as CoreConfig;
 
     return topLevel;
   }, [
     tokenProvider,
-    voice,
+    chatUserAddOnDelta,
+    chatUserPlaceholderOnStart,
+    chatAssistantAddOnDelta,
+    chatAssistantPlaceholderOnStart,
     webrtc,
     media,
     session,
@@ -127,7 +135,9 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   ]);
 
   const client = useMemo(() => {
-    return new RealtimeClient(clientOptions);
+    return new RealtimeClient(
+      clientOptions as RealtimeClientOptionsBeforePrune
+    );
   }, [clientOptions]);
 
   const connect = useCallback(async () => {

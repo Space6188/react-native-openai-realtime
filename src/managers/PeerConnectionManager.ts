@@ -1,16 +1,18 @@
-import { ErrorHandler } from '@react-native-openai-realtime/handlers/error';
-import { SuccessHandler } from '@react-native-openai-realtime/handlers/success';
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
 import { RTCPeerConnection } from 'react-native-webrtc';
 
 export class PeerConnectionManager {
   private pc: RTCPeerConnection | null = null;
-  private options: RealtimeClientOptions;
+  private options: RealtimeClientOptionsBeforePrune;
   private errorHandler: ErrorHandler;
   private successHandler: SuccessHandler;
 
   constructor(
-    options: RealtimeClientOptions,
+    options: RealtimeClientOptionsBeforePrune,
     errorHandler: ErrorHandler,
     successHandler: SuccessHandler
   ) {

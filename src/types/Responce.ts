@@ -1,8 +1,6 @@
 export type ResponseCreateParams = {
-  // Требуемый при явном вызове sendResponse(params)
   instructions: string;
   modalities?: Array<'audio' | 'text'>;
-  // Можешь расширить, если используешь conversation options
 };
 
 export type ResponseCreateOptions = {

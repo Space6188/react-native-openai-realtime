@@ -1,9 +1,8 @@
 {
-  "extends": "./tsconfig.build.json",
   "compilerOptions": {
-    "baseUrl": ".",
+    "baseUrl": "./lib/typescript",
     "paths": {
-      "@react-native-openai-realtime/*": ["./src/*"]
+      "@react-native-openai-realtime/*": ["./*"]
     }
   }
 }

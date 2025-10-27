@@ -1,3 +1,9 @@
+import type {
+  RTCPeerConnection,
+  MediaStreamTrack,
+  MediaStream,
+} from 'react-native-webrtc';
+import type RTCDataChannel from 'react-native-webrtc/lib/typescript/RTCDataChannel';
 export interface SuccessCallbacks {
   onHangUpStarted?: () => void;
   onHangUpDone?: () => void;
@@ -20,7 +26,7 @@ export interface SuccessCallbacks {
   onLocalStreamRemovedTrack?: (track: MediaStreamTrack) => void;
   onRemoteStreamSetted?: (stream: MediaStream) => void;
 
-  onDataChannelOpen?: (channel: any) => void;
+  onDataChannelOpen?: (channel: RTCDataChannel) => void;
   onDataChannelMessage?: (message: any) => void;
   onDataChannelClose?: () => void;
 

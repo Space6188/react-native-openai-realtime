@@ -1,16 +1,15 @@
 // src/adapters/ChatAdapter.ts
-import type { ChatMsg } from '@react-native-openai-realtime/types';
-
-export type ChatAdapterOptions = {
-  isMeaningfulText?: (text: string) => boolean;
-};
-
+import {
+  ChatAdapterOptions,
+  ChatMsg,
+} from '@react-native-openai-realtime/types';
+import { RealtimeClient } from '@react-native-openai-realtime/components';
 /**
  * Без дублирования: только подписка на встроенный ChatStore клиента.
  * Если chatStore отключён — возвращаем noop и ничего не делаем.
  */
 export function attachChatAdapter(
-  client: any, // RealtimeClient
+  client: RealtimeClient, // RealtimeClient
   setChat: React.Dispatch<React.SetStateAction<ChatMsg[]>>,
   _opts?: ChatAdapterOptions
 ) {

@@ -4,6 +4,22 @@ import type { ChatMsg } from '@react-native-openai-realtime/types';
 type Side = 'user' | 'assistant';
 type Listener = (chat: ChatMsg[]) => void;
 
+type StoreRow = {
+  inChat: boolean; // уже есть сообщение в чате
+  hasText: boolean; // был ли хоть какой-то текст
+  buffer: string; // накопитель для дельт, если мы не показываем их сразу
+};
+
+type ChatStoreOptions = {
+  isMeaningfulText?: (t: string) => boolean;
+
+  // Управление поведением добавления в чат во время транскрипции
+  userAddOnDelta?: boolean; // true — добавлять юзер-сообщение при первой дельте
+  userPlaceholderOnStart?: boolean; // true — создать пустое сообщение на user:item_started
+  assistantAddOnDelta?: boolean; // true — добавлять ассистентское сообщение при первой дельте
+  assistantPlaceholderOnStart?: boolean; // true — создать пустое на assistant:response_started
+};
+
 export class ChatStore {
   private chat: ChatMsg[] = [];
   private listeners = new Set<Listener>();
@@ -11,16 +27,34 @@ export class ChatStore {
   private seqRef = 0;
   private userOrderRef = new Map<string, number>();
   private respOrderRef = new Map<string, number>();
-  private userState = new Map<string, { inChat: boolean; hasText: boolean }>();
-  private assistantState = new Map<
-    string,
-    { inChat: boolean; hasText: boolean }
-  >();
+
+  private userState = new Map<string, StoreRow>();
+  private assistantState = new Map<string, StoreRow>();
 
   private isMeaningful: (text: string) => boolean;
 
-  constructor(opts?: { isMeaningfulText?: (t: string) => boolean }) {
+  private cfg: Required<Omit<ChatStoreOptions, 'isMeaningfulText'>> = {
+    userAddOnDelta: true,
+    userPlaceholderOnStart: false,
+    assistantAddOnDelta: true,
+    assistantPlaceholderOnStart: false,
+  };
+
+  constructor(opts?: ChatStoreOptions) {
     this.isMeaningful = opts?.isMeaningfulText ?? ((t: string) => !!t.trim());
+    if (opts) {
+      this.cfg = {
+        ...this.cfg,
+        userAddOnDelta: opts.userAddOnDelta ?? this.cfg.userAddOnDelta,
+        userPlaceholderOnStart:
+          opts.userPlaceholderOnStart ?? this.cfg.userPlaceholderOnStart,
+        assistantAddOnDelta:
+          opts.assistantAddOnDelta ?? this.cfg.assistantAddOnDelta,
+        assistantPlaceholderOnStart:
+          opts.assistantPlaceholderOnStart ??
+          this.cfg.assistantPlaceholderOnStart,
+      };
+    }
   }
 
   get() {
@@ -45,47 +79,118 @@ export class ChatStore {
     return side === 'user' ? this.userState : this.assistantState;
   }
 
+  private ensureOrder(side: Side, id: string) {
+    const map = this.orderBy(side);
+    if (!map.has(id)) {
+      map.set(id, ++this.seqRef);
+    }
+    return map.get(id)!;
+  }
+
   startUser(itemId: string) {
-    this.userState.set(itemId, { inChat: false, hasText: false });
+    // Регистрируем порядок
     this.userOrderRef.set(itemId, ++this.seqRef);
+
+    const placeholder = this.cfg.userPlaceholderOnStart;
+    this.userState.set(itemId, {
+      inChat: placeholder,
+      hasText: false,
+      buffer: '',
+    });
+
+    if (placeholder) {
+      const ts0 = this.userOrderRef.get(itemId)!;
+      const now = Date.now();
+      const msg: ChatMsg & { time: number } = {
+        id: itemId,
+        itemId,
+        type: 'text',
+        role: 'user',
+        text: '',
+        ts: ts0,
+        time: now,
+        status: 'streaming',
+      };
+      this.chat = [...this.chat, msg];
+      this.emit();
+    }
   }
 
   startAssistant(responseId: string) {
-    this.assistantState.set(responseId, { inChat: false, hasText: false });
     this.respOrderRef.set(responseId, ++this.seqRef);
+
+    const placeholder = this.cfg.assistantPlaceholderOnStart;
+    this.assistantState.set(responseId, {
+      inChat: placeholder,
+      hasText: false,
+      buffer: '',
+    });
+
+    if (placeholder) {
+      const ts0 = this.respOrderRef.get(responseId)!;
+      const now = Date.now();
+      const msg: ChatMsg & { time: number } = {
+        id: responseId,
+        responseId,
+        role: 'assistant',
+        text: '',
+        ts: ts0,
+        type: 'text',
+        time: now,
+        status: 'streaming',
+      };
+      this.chat = [...this.chat, msg];
+      this.emit();
+    }
   }
 
   putDelta(side: Side, id: string, delta: string) {
     if (!id || !delta) return;
 
     const store = this.stateBy(side);
-    const st = store.get(id) || { inChat: false, hasText: false };
-    const ts0 = this.orderBy(side).get(id) ?? Date.now();
+    const st = store.get(id) || { inChat: false, hasText: false, buffer: '' };
+    // Убедимся, что есть порядковый ts
+    const ts0 = this.orderBy(side).get(id) ?? this.ensureOrder(side, id);
+
+    const addOnDelta =
+      side === 'user' ? this.cfg.userAddOnDelta : this.cfg.assistantAddOnDelta;
 
     if (!st.inChat) {
-      const now = Date.now();
-      const msg: ChatMsg & { time: number } = {
-        id,
-        itemId: side === 'user' ? id : undefined,
-        responseId: side === 'assistant' ? id : undefined,
-        role: side,
-        text: delta,
-        ts: ts0, // порядковый номер/seq
-        time: now, // время первого появления в чате
-        status: 'streaming',
-      };
-      this.chat = [...this.chat, msg];
-      st.inChat = true;
+      if (addOnDelta) {
+        // Добавляем новое сообщение в чат при первой дельте
+        const now = Date.now();
+        const msg: ChatMsg & { time: number } = {
+          id,
+          type: 'text',
+          itemId: side === 'user' ? id : undefined,
+          responseId: side === 'assistant' ? id : undefined,
+          role: side,
+          text: (st.buffer || '') + delta,
+          ts: ts0,
+          time: now,
+          status: 'streaming',
+        };
+        this.chat = [...this.chat, msg];
+        st.inChat = true;
+        st.hasText = true;
+        st.buffer = ''; // сбрасываем буфер, так как теперь рендерим прямо в чате
+      } else {
+        // Не добавляем в чат — просто накапливаем буфер
+        st.buffer += delta;
+        st.hasText = true;
+        // emit не делаем — в чате пока ничего не меняется
+      }
     } else {
+      // Сообщение уже в чате (плейсхолдер или ранее добавленное по дельте) — дописываем текст
       this.chat = this.chat.map((m) => {
         const match = side === 'user' ? m.itemId === id : m.responseId === id;
         return match ? { ...m, text: (m.text || '') + delta } : m;
       });
+      st.hasText = true;
     }
 
-    st.hasText = true;
     store.set(id, st);
-    this.emit();
+    if (st.inChat) this.emit();
   }
 
   finalize(
@@ -95,23 +200,30 @@ export class ChatStore {
     finalText?: string
   ) {
     const store = this.stateBy(side);
+    const st = store.get(id); // сохраним ссылку, чтобы вытащить buffer
     store.delete(id);
 
     const idx = this.chat.findIndex((m) =>
       side === 'user' ? m.itemId === id : m.responseId === id
     );
 
+    // Текст, который будем фиксировать:
+    const buffered = st?.buffer ?? '';
+    const textToUse = finalText ?? buffered;
+
     if (idx === -1) {
-      if (side === 'user' && finalText && this.isMeaningful(finalText)) {
+      if (this.isMeaningful(textToUse)) {
         const ts0 = this.orderBy(side).get(id) ?? Date.now();
         const now = Date.now();
         const msg: ChatMsg & { time: number } = {
           id,
-          itemId: id,
-          role: 'user',
-          text: finalText,
+          type: 'text',
+          itemId: side === 'user' ? id : undefined,
+          responseId: side === 'user' ? undefined : id,
+          role: side,
+          text: textToUse,
           ts: ts0,
-          time: now, // время появления (если сообщение пришло только на finalize)
+          time: now,
           status: 'done',
         };
         this.chat = [...this.chat, msg];
@@ -120,10 +232,12 @@ export class ChatStore {
       return;
     }
 
+    // Сообщение уже в ленте — обновим финальный текст/статус
     const msg = this.chat[idx];
-    const text = finalText ?? msg?.text ?? '';
+    // Если финального текста нет, а в чате был плейсхолдер — подставим буфер
+    const mergedText = finalText ?? (msg?.text || '' || buffered);
 
-    if (!this.isMeaningful(text)) {
+    if (!this.isMeaningful(mergedText)) {
       const copy = [...this.chat];
       copy.splice(idx, 1);
       this.chat = copy;
@@ -132,8 +246,7 @@ export class ChatStore {
     }
 
     const copy = [...this.chat];
-    // time НЕ меняем — оно фиксирует момент первого добавления
-    copy[idx] = { ...msg!, text, status };
+    copy[idx] = { ...msg!, text: mergedText, status };
     this.chat = copy;
     this.emit();
   }

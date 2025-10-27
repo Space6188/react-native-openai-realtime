@@ -7,12 +7,8 @@
     "declaration": true,
     "emitDeclarationOnly": true,
     "declarationMap": false,
-    "sourceMap": false,
-
-    "baseUrl": ".",
-    "paths": {
-      "@react-native-openai-realtime/*": ["./src/*"]
-    }
+    "sourceMap": false
+    // Убираем baseUrl и paths - они не нужны для output
   },
   "include": ["src/**/*"],
   "exclude": [

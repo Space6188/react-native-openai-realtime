@@ -1,23 +1,27 @@
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
-import type {
+import { ChatStore } from '@react-native-openai-realtime/adapters';
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
+import { applyDefaults } from '@react-native-openai-realtime/helpers';
+import {
+  PeerConnectionManager,
+  MediaManager,
+  DataChannelManager,
+  MessageSender,
+  EventRouter,
+  OpenAIApiClient,
+} from '@react-native-openai-realtime/managers';
+import {
+  RealtimeClientOptionsBeforePrune,
   ResponseCreateParams,
   ResponseCreateStrict,
-} from '@react-native-openai-realtime/types/Responce';
-import { ErrorHandler } from '@react-native-openai-realtime/handlers/error';
-import { SuccessHandler } from '@react-native-openai-realtime/handlers/success';
-import { applyDefaults } from '@react-native-openai-realtime/helpers/applyDefaults';
-import { ChatStore } from '@react-native-openai-realtime/adapters/ChatStore';
-import { PeerConnectionManager } from '@react-native-openai-realtime/managers/PeerConnectionManager';
-import { MediaManager } from '@react-native-openai-realtime/managers/MediaManager';
-import { DataChannelManager } from '@react-native-openai-realtime/managers/DataChannelManager';
-import { MessageSender } from '@react-native-openai-realtime/managers/MessageSender';
-import { EventRouter } from '@react-native-openai-realtime/managers/EventRouter';
-import { OpenAIApiClient } from '@react-native-openai-realtime/managers/OpenAIApiManager';
+} from '@react-native-openai-realtime/types';
 
 type Listener = (payload: any) => void;
 
 export class RealtimeClient {
-  private options: RealtimeClientOptions;
+  private options: RealtimeClientOptionsBeforePrune;
 
   // Managers
   private peerConnectionManager: PeerConnectionManager;
@@ -35,7 +39,7 @@ export class RealtimeClient {
   private chatStore?: ChatStore;
 
   constructor(
-    userOptions: RealtimeClientOptions,
+    userOptions: RealtimeClientOptionsBeforePrune,
     success?: SuccessHandler,
     error?: ErrorHandler
   ) {
@@ -83,11 +87,19 @@ export class RealtimeClient {
     this.apiClient = new OpenAIApiClient(this.errorHandler);
 
     // Chat store
+    // Chat store
     if (this.options.chat?.enabled !== false) {
       this.chatStore = new ChatStore({
         isMeaningfulText:
           this.options.chat?.isMeaningfulText ??
           this.options.policy?.isMeaningfulText,
+
+        // NEW: прокидываем флаги поведения
+        userAddOnDelta: this.options.chat?.userAddOnDelta,
+        userPlaceholderOnStart: this.options.chat?.userPlaceholderOnStart,
+        assistantAddOnDelta: this.options.chat?.assistantAddOnDelta,
+        assistantPlaceholderOnStart:
+          this.options.chat?.assistantPlaceholderOnStart,
       });
       this.wireChatStore();
     }

@@ -1,11 +1,11 @@
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
-import { deepMerge } from '@react-native-openai-realtime/helpers/deepMerge';
-import { DEFAULTS } from '@react-native-openai-realtime/constants/defaultOptions';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import { deepMerge } from '@react-native-openai-realtime/helpers';
+import { DEFAULTS } from '@react-native-openai-realtime/constants';
 
 export function applyDefaults(
-  user: RealtimeClientOptions
-): RealtimeClientOptions {
-  const merged = deepMerge<RealtimeClientOptions>(DEFAULTS, user);
+  user: RealtimeClientOptionsBeforePrune
+): RealtimeClientOptionsBeforePrune {
+  const merged = deepMerge<RealtimeClientOptionsBeforePrune>(DEFAULTS, user);
   // Если greet.enabled true, а instructions не заданы — подставим дефолт
   if (
     merged.greet?.enabled &&

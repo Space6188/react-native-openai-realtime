@@ -1,19 +1,19 @@
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
 import type {
   ResponseCreateParams,
   ResponseCreateStrict,
-} from '@react-native-openai-realtime/types/Responce';
-import { ErrorHandler } from '@react-native-openai-realtime/handlers/error';
+  RealtimeClientOptionsBeforePrune,
+} from '@react-native-openai-realtime/types';
+import { ErrorHandler } from '@react-native-openai-realtime/handlers';
 import { DataChannelManager } from './DataChannelManager';
 
 export class MessageSender {
   private dataChannelManager: DataChannelManager;
-  private options: RealtimeClientOptions;
+  private options: RealtimeClientOptionsBeforePrune;
   private errorHandler: ErrorHandler;
 
   constructor(
     dataChannelManager: DataChannelManager,
-    options: RealtimeClientOptions,
+    options: RealtimeClientOptionsBeforePrune,
     errorHandler: ErrorHandler
   ) {
     this.dataChannelManager = dataChannelManager;

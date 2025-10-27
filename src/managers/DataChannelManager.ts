@@ -1,20 +1,22 @@
 import type { RTCPeerConnection } from 'react-native-webrtc';
 import type RTCDataChannel from 'react-native-webrtc/lib/typescript/RTCDataChannel';
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
-import { ErrorHandler } from '@react-native-openai-realtime/handlers/error';
-import { SuccessHandler } from '@react-native-openai-realtime/handlers/success';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
 
 type MessageHandler = (message: any) => void | Promise<void>;
 
 export class DataChannelManager {
   private dc: RTCDataChannel | null = null;
-  private options: RealtimeClientOptions;
+  private options: RealtimeClientOptionsBeforePrune;
   private errorHandler: ErrorHandler;
   private successHandler: SuccessHandler;
   private onMessage?: MessageHandler;
 
   constructor(
-    options: RealtimeClientOptions,
+    options: RealtimeClientOptionsBeforePrune,
     errorHandler: ErrorHandler,
     successHandler: SuccessHandler
   ) {

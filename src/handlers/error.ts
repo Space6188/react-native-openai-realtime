@@ -3,7 +3,7 @@ import type {
   ErrorEvent,
   ErrorStage,
   ErrorSeverity,
-} from '@react-native-openai-realtime/types/ErrorStage';
+} from '@react-native-openai-realtime/types';
 
 export class ErrorHandler {
   private onError?: (event: ErrorEvent) => void;

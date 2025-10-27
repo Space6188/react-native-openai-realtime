@@ -1,6 +1,6 @@
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
 
-export const DEFAULTS: RealtimeClientOptions = {
+export const DEFAULTS: RealtimeClientOptionsBeforePrune = {
   // tokenProvider — обязателен, без него нельзя получить ephemeral token
   tokenProvider: async () => {
     throw new Error(
@@ -34,7 +34,7 @@ export const DEFAULTS: RealtimeClientOptions = {
 
   session: {
     model: 'gpt-4o-realtime-preview-2024-12-17',
-    voice: 'verse',
+    voice: 'alloy',
     modalities: ['audio', 'text'],
     input_audio_transcription: { model: 'whisper-1' },
     turn_detection: {

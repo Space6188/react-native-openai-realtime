@@ -26,8 +26,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "clean": "del-cli lib",
-    "prepare": "bob build && node ./scripts/fix-aliases.js",
-    "release": "release-it --only-version"
+    "release": "release-it --only-version",
+    "prepare": "bob build && tsc-alias -p tsconfig.alias.json --outDir lib/typescript",
+    "fix-aliases": "node ./scripts/fix-aliases.js"
   },
   "keywords": [
     "react-native",
@@ -140,7 +141,7 @@
         {
           "esm": true,
           "babelrc": false,
-          "configFile": false
+          "configFile": "./babel.config.js"
         }
       ],
       [

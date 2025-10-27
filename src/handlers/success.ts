@@ -1,4 +1,4 @@
-import type { SuccessCallbacks } from '@react-native-openai-realtime/types/SucessCallbacks';
+import type { SuccessCallbacks } from '@react-native-openai-realtime/types';
 import type { RTCPeerConnection, MediaStreamTrack } from 'react-native-webrtc';
 import { MediaStream } from 'react-native-webrtc';
 import type RTCDataChannel from 'react-native-webrtc/lib/typescript/RTCDataChannel';

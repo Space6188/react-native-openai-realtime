@@ -1,19 +1,21 @@
 // core/managers/MediaManager.ts
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import type { RTCPeerConnection } from 'react-native-webrtc';
-import { ErrorHandler } from '@react-native-openai-realtime/handlers/error';
-import { SuccessHandler } from '@react-native-openai-realtime/handlers/success';
-import type { RealtimeClientOptions } from '@react-native-openai-realtime/types';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
 
 export class MediaManager {
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
-  private options: RealtimeClientOptions;
+  private options: RealtimeClientOptionsBeforePrune;
   private errorHandler: ErrorHandler;
   private successHandler: SuccessHandler;
 
   constructor(
-    options: RealtimeClientOptions,
+    options: RealtimeClientOptionsBeforePrune,
     errorHandler: ErrorHandler,
     successHandler: SuccessHandler
   ) {
