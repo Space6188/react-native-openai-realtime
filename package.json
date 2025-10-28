@@ -53,7 +53,6 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "react-native-incall-manager": "^4.2.1",
     "react-native-webrtc": "^124.0.7"
   },
   "devDependencies": {
