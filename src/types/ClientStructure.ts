@@ -134,6 +134,8 @@ export type RealtimeClientOptionsBeforePrune = {
 export type RealTimeClientProps = {
   // быстрые чат-поведения
   chatUserAddOnDelta?: boolean;
+  chatInverted?: boolean;
+
   chatUserPlaceholderOnStart?: boolean;
   chatAssistantAddOnDelta?: boolean;
   chatAssistantPlaceholderOnStart?: boolean;

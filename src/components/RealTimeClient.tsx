@@ -19,6 +19,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   tokenProvider,
   webrtc,
   media,
+  chatInverted,
   session,
   autoSessionUpdate,
   greetEnabled,
@@ -64,6 +65,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       tokenProvider,
       webrtc,
       media,
+      chatInverted,
       session,
       autoSessionUpdate,
       greet:
@@ -113,6 +115,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     chatAssistantPlaceholderOnStart,
     webrtc,
     media,
+    chatInverted,
     session,
     autoSessionUpdate,
     greetEnabled,
@@ -235,12 +238,21 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
 
   const clearAdded = useCallback(() => setAddedMessages([]), []);
 
-  // NEW: объединяем системный чат и локальные сообщения
   const mergedChat = useMemo<ExtendedChatMsg[]>(() => {
+    // Объединяем два массива сообщений
     const merged = [...(chat ?? []), ...addedMessages];
-    // Сортируем по возрастанию ts (как в твоём UI)
-    return merged.sort((a: any, b: any) => (a.ts ?? 0) - (b.ts ?? 0));
-  }, [chat, addedMessages]);
+
+    if (chatInverted) {
+      // Для FlatList inverted={true}, новые элементы должны быть в конце.
+      // Сортировка по возрастанию `ts` гарантирует, что старые сообщения будут в начале, а новые - в конце.
+      // FlatList сам перевернет порядок отображения.
+      return merged.sort((a: any, b: any) => (a.ts ?? 0) - (b.ts ?? 0));
+    } else {
+      // Для обычного FlatList, новые элементы должны быть в начале.
+      // Сортируем по убыванию `ts`.
+      return merged.sort((a: any, b: any) => (b.ts ?? 0) - (a.ts ?? 0));
+    }
+  }, [chat, addedMessages, chatInverted]);
 
   const value: RealtimeContextValue = useMemo(
     () => ({

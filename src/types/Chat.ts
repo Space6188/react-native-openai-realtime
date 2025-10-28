@@ -28,6 +28,7 @@ export type UIChatMsg = {
   role: 'assistant' | 'user' | 'system' | 'tool';
   ts: number;
   type: 'ui';
+  time: number;
   kind: string; // тип вашего UI-сообщения
   payload: any; // любые данные для рендера
 };
