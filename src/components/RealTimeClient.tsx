@@ -58,6 +58,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
+  // Опции собираем как раньше
   const clientOptions: CoreConfig = useMemo(() => {
     const topLevel: CoreConfig = prune({
       tokenProvider,
@@ -135,36 +136,40 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     logger,
   ]);
 
-  const client = useMemo(() => {
-    return new RealtimeClientClass(
-      clientOptions as RealtimeClientOptionsBeforePrune
-    );
-  }, [clientOptions]);
-
-  // Подписка на connectionState из класса
+  // ✅ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: создаём клиент ОДИН РАЗ при монтировании
   useEffect(() => {
-    if (!client) return;
+    if (!clientRef.current) {
+      clientRef.current = new RealtimeClientClass(
+        clientOptions as RealtimeClientOptionsBeforePrune
+      );
 
-    setConnectionState(client.getConnectionState());
+      // Подписываемся на изменения connectionState
+      setConnectionState(clientRef.current.getConnectionState());
 
-    const unsub = client.onConnectionStateChange((state) => {
-      setConnectionState(state);
-    });
+      const unsub = clientRef.current.onConnectionStateChange((state) => {
+        setConnectionState(state);
+      });
 
-    connectionUnsubRef.current = unsub;
+      connectionUnsubRef.current = unsub;
+    }
 
     return () => {
+      // При размонтировании отписываемся
       if (connectionUnsubRef.current) {
         connectionUnsubRef.current();
         connectionUnsubRef.current = null;
       }
     };
-  }, [client]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // ← создаём клиент ОДИН РАЗ
+
+  // Извлекаем client для удобства (всегда один и тот же)
+  const client = clientRef.current!;
 
   const connect = useCallback(async () => {
-    try {
-      clientRef.current = client;
+    if (!client) return;
 
+    try {
       if (attachChat && !detachChatRef.current) {
         const isMeaningful =
           chatIsMeaningfulText ??
@@ -182,33 +187,28 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   }, [client, attachChat, chatIsMeaningfulText, policyIsMeaningfulText]);
 
   const disconnect = useCallback(async () => {
+    if (!client) return;
+
     try {
-      if (clientRef.current) {
-        await clientRef.current.disconnect();
-      }
+      await client.disconnect();
     } finally {
       if (detachChatRef.current) {
         detachChatRef.current();
         detachChatRef.current = null;
       }
-      if (connectionUnsubRef.current) {
-        connectionUnsubRef.current();
-        connectionUnsubRef.current = null;
-      }
-      clientRef.current = null;
       setChat([]);
       setAddedMessages([]);
     }
-  }, []);
+  }, [client]);
 
   useEffect(() => {
-    if (!autoConnect) return;
+    if (!autoConnect || !client) return;
     connect().catch(() => {});
     return () => {
       disconnect().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [autoConnect]);
 
   const normalize = useCallback((m: AddableMessage): ExtendedChatMsg => {
     const base = {
@@ -266,14 +266,14 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       chat: mergedChat,
       connect,
       disconnect,
-      sendResponse: (opts?: any) => client.sendResponse(opts),
+      sendResponse: (opts?: any) => client?.sendResponse(opts),
       sendResponseStrict: (opts: {
         instructions: string;
         modalities?: Array<'audio' | 'text'>;
         conversation?: 'default' | 'none';
-      }) => client.sendResponseStrict(opts),
-      updateSession: (patch: Partial<any>) => client.updateSession(patch),
-      sendRaw: (e: any) => client.sendRaw(e),
+      }) => client?.sendResponseStrict(opts),
+      updateSession: (patch: Partial<any>) => client?.updateSession(patch),
+      sendRaw: (e: any) => client?.sendRaw(e),
       addMessage,
       clearAdded,
     }),
@@ -290,6 +290,9 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
 
   const renderedChildren =
     typeof children === 'function' ? (children as any)(value) : children;
+
+  // Не рендерим детей, пока клиент не создан
+  if (!client) return null;
 
   return (
     <RealtimeProvider value={value}>
