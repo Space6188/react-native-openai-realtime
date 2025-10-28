@@ -5,7 +5,7 @@ import type {
   Constraints,
   ChatOptions,
 } from '@react-native-openai-realtime/types';
-import { RealtimeClient } from '@react-native-openai-realtime/components';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 export type RTCIceServer = {
   credential?: string;
   url?: string;
@@ -73,7 +73,7 @@ export type RealtimeClientHooks = {
 export type MiddlewareCtx = {
   event: any;
   send: (e: any) => void | Promise<void>;
-  client: RealtimeClient; // RealtimeClient
+  client: RealtimeClientClass; // RealtimeClientClass
 };
 export type IncomingMiddleware = (
   ctx: MiddlewareCtx

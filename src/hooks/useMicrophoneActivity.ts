@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRealtime } from '@react-native-openai-realtime/hooks';
-import type { RealtimeClient } from '@react-native-openai-realtime/components';
+import type { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 type Mode = 'server' | 'stats' | 'auto';
 
 export type UseMicrophoneActivityOptions = {
-  client?: RealtimeClient | null;
+  client?: RealtimeClientClass | null;
   mode?: Mode; // default: 'auto'
   silenceMs?: number; // таймаут без "дельт", после которого считаем тишину (по server-событиям)
   levelThreshold?: number; // порог срабатывания для stats-режима
@@ -14,8 +14,7 @@ export type UseMicrophoneActivityOptions = {
 
 export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
   const { client: ctxClient } = useRealtime();
-  const client = opts?.client ?? (ctxClient as RealtimeClient | null);
-
+  const client = opts?.client ?? (ctxClient as RealtimeClientClass | null);
   const [isMicActive, setIsMicActive] = useState(false);
   const [level, setLevel] = useState(0);
   const [isCapturing, setIsCapturing] = useState(false);

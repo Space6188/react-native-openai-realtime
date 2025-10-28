@@ -8,7 +8,7 @@ import {
   RealtimeContextValue,
 } from '@react-native-openai-realtime/types';
 import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RealtimeClient } from './RealtimeClientClass';
+import { RealtimeClientClass } from './RealtimeClientClass';
 import { attachChatAdapter } from '@react-native-openai-realtime/adapters';
 import { RealtimeProvider } from '@react-native-openai-realtime/context';
 import { prune } from '@react-native-openai-realtime/helpers';
@@ -47,19 +47,17 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   chatAssistantAddOnDelta,
   chatAssistantPlaceholderOnStart,
 }) => {
-  const clientRef = useRef<RealtimeClient | null>(null);
+  const clientRef = useRef<RealtimeClientClass | null>(null);
   const detachChatRef = useRef<null | (() => void)>(null);
+  const connectionUnsubRef = useRef<(() => void) | null>(null);
 
-  const [isConnected, setIsConnected] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionState, setConnectionState] = useState<
+    'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
+  >('idle');
 
-  // Базовый чат из встроенного ChatStore
   const [chat, setChat] = useState<ChatMsg[]>([]);
-
-  // NEW: локальные добавленные сообщения (UI и др.)
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
-  // Собираем RealtimeClientOptions только из верхнеуровневых пропсов
   const clientOptions: CoreConfig = useMemo(() => {
     const topLevel: CoreConfig = prune({
       tokenProvider,
@@ -138,14 +136,33 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   ]);
 
   const client = useMemo(() => {
-    return new RealtimeClient(
+    return new RealtimeClientClass(
       clientOptions as RealtimeClientOptionsBeforePrune
     );
   }, [clientOptions]);
 
+  // Подписка на connectionState из класса
+  useEffect(() => {
+    if (!client) return;
+
+    setConnectionState(client.getConnectionState());
+
+    const unsub = client.onConnectionStateChange((state) => {
+      setConnectionState(state);
+    });
+
+    connectionUnsubRef.current = unsub;
+
+    return () => {
+      if (connectionUnsubRef.current) {
+        connectionUnsubRef.current();
+        connectionUnsubRef.current = null;
+      }
+    };
+  }, [client]);
+
   const connect = useCallback(async () => {
     try {
-      setIsConnecting(true);
       clientRef.current = client;
 
       if (attachChat && !detachChatRef.current) {
@@ -158,18 +175,13 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
         });
       }
 
-      client.on('assistant:response_started', () => setIsConnected(true));
       await client.connect();
-      setIsConnected(true);
     } catch (e) {
-      setIsConnected(false);
       throw e;
-    } finally {
-      setIsConnecting(false);
     }
   }, [client, attachChat, chatIsMeaningfulText, policyIsMeaningfulText]);
 
-  const disconnect = async () => {
+  const disconnect = useCallback(async () => {
     try {
       if (clientRef.current) {
         await clientRef.current.disconnect();
@@ -179,12 +191,15 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
         detachChatRef.current();
         detachChatRef.current = null;
       }
+      if (connectionUnsubRef.current) {
+        connectionUnsubRef.current();
+        connectionUnsubRef.current = null;
+      }
       clientRef.current = null;
-      setIsConnected(false);
       setChat([]);
-      setAddedMessages([]); // NEW: очищаем локальные сообщения при дисконнекте
+      setAddedMessages([]);
     }
-  };
+  }, []);
 
   useEffect(() => {
     if (!autoConnect) return;
@@ -195,7 +210,6 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // NEW: нормализация входящих addMessage
   const normalize = useCallback((m: AddableMessage): ExtendedChatMsg => {
     const base = {
       id: m.id ?? makeId(),
@@ -203,7 +217,6 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       ts: m.ts ?? Date.now(),
     };
 
-    // UI-сообщение
     if (
       (m as any).type === 'ui' ||
       ('kind' in (m as any) && 'payload' in (m as any))
@@ -216,7 +229,6 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       } as ExtendedChatMsg;
     }
 
-    // Текстовое сообщение (по умолчанию)
     return {
       ...base,
       type: 'text',
@@ -224,7 +236,6 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     } as unknown as ExtendedChatMsg;
   }, []);
 
-  // NEW: публичные методы
   const addMessage = useCallback(
     (m: AddableMessage | AddableMessage[]) => {
       const arr = Array.isArray(m) ? m : [m];
@@ -239,17 +250,11 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   const clearAdded = useCallback(() => setAddedMessages([]), []);
 
   const mergedChat = useMemo<ExtendedChatMsg[]>(() => {
-    // Объединяем два массива сообщений
     const merged = [...(chat ?? []), ...addedMessages];
 
     if (chatInverted) {
-      // Для FlatList inverted={true}, новые элементы должны быть в конце.
-      // Сортировка по возрастанию `ts` гарантирует, что старые сообщения будут в начале, а новые - в конце.
-      // FlatList сам перевернет порядок отображения.
       return merged.sort((a: any, b: any) => (a.ts ?? 0) - (b.ts ?? 0));
     } else {
-      // Для обычного FlatList, новые элементы должны быть в начале.
-      // Сортируем по убыванию `ts`.
       return merged.sort((a: any, b: any) => (b.ts ?? 0) - (a.ts ?? 0));
     }
   }, [chat, addedMessages, chatInverted]);
@@ -257,8 +262,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
   const value: RealtimeContextValue = useMemo(
     () => ({
       client,
-      isConnected,
-      isConnecting,
+      status: connectionState,
       chat: mergedChat,
       connect,
       disconnect,
@@ -270,17 +274,15 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       }) => client.sendResponseStrict(opts),
       updateSession: (patch: Partial<any>) => client.updateSession(patch),
       sendRaw: (e: any) => client.sendRaw(e),
-
-      // NEW:
       addMessage,
       clearAdded,
     }),
     [
       client,
-      isConnected,
-      isConnecting,
+      connectionState,
       mergedChat,
       connect,
+      disconnect,
       addMessage,
       clearAdded,
     ]

@@ -19,9 +19,20 @@ import {
 } from '@react-native-openai-realtime/types';
 
 type Listener = (payload: any) => void;
+type ConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'error';
+type ConnectionListener = (state: ConnectionState) => void;
 
-export class RealtimeClient {
+export class RealtimeClientClass {
   private options: RealtimeClientOptionsBeforePrune;
+
+  // Connection state
+  private connectionState: ConnectionState = 'idle';
+  private connectionListeners = new Set<ConnectionListener>();
 
   // Managers
   private peerConnectionManager: PeerConnectionManager;
@@ -47,10 +58,50 @@ export class RealtimeClient {
 
     this.errorHandler =
       error ??
-      new ErrorHandler(this.options.hooks?.onError, {
-        error: this.options.logger?.error,
-      });
-    this.successHandler = success ?? new SuccessHandler({}, undefined);
+      new ErrorHandler(
+        (event) => {
+          if (event.severity === 'critical') {
+            this.setConnectionState('error');
+          }
+          // пробрасываем наружу, если хук указан
+          this.options.hooks?.onError?.(event);
+        },
+        {
+          error: this.options.logger?.error,
+        }
+      );
+
+    // SuccessHandler для синхронизации connectionState c WebRTC/DataChannel
+    const callbacks = {
+      onPeerConnectionCreatingStarted: () => {
+        this.setConnectionState('connecting');
+      },
+      onRTCPeerConnectionStateChange: (
+        state:
+          | 'new'
+          | 'connecting'
+          | 'connected'
+          | 'disconnected'
+          | 'failed'
+          | 'closed'
+      ) => {
+        if (state === 'connected') this.setConnectionState('connected');
+        else if (state === 'connecting' || state === 'new')
+          this.setConnectionState('connecting');
+        else if (state === 'failed') this.setConnectionState('error');
+        else if (state === 'disconnected' || state === 'closed')
+          this.setConnectionState('disconnected');
+      },
+      onDataChannelOpen: () => {
+        this.setConnectionState('connected');
+      },
+      onDataChannelClose: () => {
+        this.setConnectionState('disconnected');
+      },
+    };
+
+    this.successHandler =
+      success ?? new SuccessHandler(callbacks as any, undefined);
 
     // Initialize managers
     this.peerConnectionManager = new PeerConnectionManager(
@@ -77,7 +128,6 @@ export class RealtimeClient {
       this.errorHandler
     );
 
-    // ВАЖНО: пробрасываем sendRaw и client в EventRouter
     this.eventRouter = new EventRouter(
       this.options,
       this.sendRaw.bind(this),
@@ -87,14 +137,11 @@ export class RealtimeClient {
     this.apiClient = new OpenAIApiClient(this.errorHandler);
 
     // Chat store
-    // Chat store
     if (this.options.chat?.enabled !== false) {
       this.chatStore = new ChatStore({
         isMeaningfulText:
           this.options.chat?.isMeaningfulText ??
           this.options.policy?.isMeaningfulText,
-
-        // NEW: прокидываем флаги поведения
         userAddOnDelta: this.options.chat?.userAddOnDelta,
         userPlaceholderOnStart: this.options.chat?.userPlaceholderOnStart,
         assistantAddOnDelta: this.options.chat?.assistantAddOnDelta,
@@ -103,6 +150,22 @@ export class RealtimeClient {
       });
       this.wireChatStore();
     }
+  }
+
+  private setConnectionState(state: ConnectionState) {
+    if (this.connectionState !== state) {
+      this.connectionState = state;
+      this.connectionListeners.forEach((listener) => listener(state));
+    }
+  }
+
+  public getConnectionState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  public onConnectionStateChange(listener: ConnectionListener) {
+    this.connectionListeners.add(listener);
+    return () => this.connectionListeners.delete(listener);
   }
 
   private wireChatStore() {
@@ -142,37 +205,32 @@ export class RealtimeClient {
   // Connection management
   async connect() {
     try {
+      this.setConnectionState('connecting');
+
       const ephemeralKey = await this.options.tokenProvider();
       if (!ephemeralKey) {
         throw new Error('Empty ephemeral token');
       }
 
-      // 2) Create PeerConnection
       const pc = this.peerConnectionManager.create();
-
-      // 3) Setup remote stream handler
       this.mediaManager.setupRemoteStream(pc);
 
-      // 4) Get user media
       const stream = await this.mediaManager.getUserMedia();
       this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
 
-      // 5) Create DataChannel
       this.dataChannelManager.create(pc, async (evt) => {
         await this.eventRouter.processIncomingMessage(evt);
       });
 
-      // 6) Offer / Local SDP
       const offer = await this.peerConnectionManager.createOffer();
       await this.peerConnectionManager.setLocalDescription(offer);
 
-      // 7) Wait ICE
       await this.peerConnectionManager.waitForIceGathering();
 
-      // 8) SDP exchange
       const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
       await this.peerConnectionManager.setRemoteDescription(answer);
     } catch (e: any) {
+      this.setConnectionState('error');
       this.errorHandler.handle('init_peer_connection', e);
       throw e;
     }
@@ -191,6 +249,7 @@ export class RealtimeClient {
         this.chatStore.destroy();
       }
 
+      this.setConnectionState('disconnected');
       this.successHandler.hangUpDone();
     } catch (e: any) {
       this.errorHandler.handle('hangup', e, 'warning', true);
@@ -249,6 +308,9 @@ export class RealtimeClient {
   }
 
   isConnected() {
-    return this.peerConnectionManager.isConnected();
+    return this.connectionState === 'connected';
+  }
+  getStatus() {
+    return this.connectionState;
   }
 }

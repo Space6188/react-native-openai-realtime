@@ -1,10 +1,10 @@
 import { AddableMessage, ExtendedChatMsg } from './Chat';
-import { RealtimeClient } from '@react-native-openai-realtime/components/RealtimeClientClass';
+import type { RealtimeStatus } from '@react-native-openai-realtime/types';
+import type { RealtimeClientClass } from '@react-native-openai-realtime/components/RealtimeClientClass';
 
 export type RealtimeContextValue = {
-  client: RealtimeClient | null;
-  isConnected: boolean;
-  isConnecting: boolean;
+  client: RealtimeClientClass | null;
+  status: RealtimeStatus;
   chat: ExtendedChatMsg[];
   connect: () => Promise<void>;
   disconnect: () => Promise<void> | void;

@@ -3,13 +3,13 @@ import {
   ChatAdapterOptions,
   ChatMsg,
 } from '@react-native-openai-realtime/types';
-import { RealtimeClient } from '@react-native-openai-realtime/components';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 /**
  * Без дублирования: только подписка на встроенный ChatStore клиента.
  * Если chatStore отключён — возвращаем noop и ничего не делаем.
  */
 export function attachChatAdapter(
-  client: RealtimeClient, // RealtimeClient
+  client: RealtimeClientClass, // RealtimeClientClass
   setChat: React.Dispatch<React.SetStateAction<ChatMsg[]>>,
   _opts?: ChatAdapterOptions
 ) {
