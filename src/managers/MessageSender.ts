@@ -4,7 +4,7 @@ import type {
   RealtimeClientOptionsBeforePrune,
 } from '@react-native-openai-realtime/types';
 import { ErrorHandler } from '@react-native-openai-realtime/handlers';
-import { DataChannelManager } from './DataChannelManager';
+import { DataChannelManager } from '@react-native-openai-realtime/managers';
 
 export class MessageSender {
   private dataChannelManager: DataChannelManager;

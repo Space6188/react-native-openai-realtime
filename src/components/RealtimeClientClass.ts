@@ -12,10 +12,11 @@ import {
   EventRouter,
   OpenAIApiClient,
 } from '@react-native-openai-realtime/managers';
-import {
+import type {
   RealtimeClientOptionsBeforePrune,
   ResponseCreateParams,
   ResponseCreateStrict,
+  TokenProvider,
 } from '@react-native-openai-realtime/types';
 
 type Listener = (payload: any) => void;
@@ -33,6 +34,10 @@ export class RealtimeClientClass {
   // Connection state
   private connectionState: ConnectionState = 'idle';
   private connectionListeners = new Set<ConnectionListener>();
+
+  // Concurrency guards
+  private connecting = false;
+  private disconnecting = false;
 
   // Managers
   private peerConnectionManager: PeerConnectionManager;
@@ -63,15 +68,11 @@ export class RealtimeClientClass {
           if (event.severity === 'critical') {
             this.setConnectionState('error');
           }
-          // пробрасываем наружу, если хук указан
           this.options.hooks?.onError?.(event);
         },
-        {
-          error: this.options.logger?.error,
-        }
+        { error: this.options.logger?.error }
       );
 
-    // SuccessHandler для синхронизации connectionState c WebRTC/DataChannel
     const callbacks = {
       onPeerConnectionCreatingStarted: () => {
         this.setConnectionState('connecting');
@@ -103,37 +104,32 @@ export class RealtimeClientClass {
     this.successHandler =
       success ?? new SuccessHandler(callbacks as any, undefined);
 
-    // Initialize managers
+    // Managers
     this.peerConnectionManager = new PeerConnectionManager(
       this.options,
       this.errorHandler,
       this.successHandler
     );
-
     this.mediaManager = new MediaManager(
       this.options,
       this.errorHandler,
       this.successHandler
     );
-
     this.dataChannelManager = new DataChannelManager(
       this.options,
       this.errorHandler,
       this.successHandler
     );
-
     this.messageSender = new MessageSender(
       this.dataChannelManager,
       this.options,
       this.errorHandler
     );
-
     this.eventRouter = new EventRouter(
       this.options,
       this.sendRaw.bind(this),
       this
     );
-
     this.apiClient = new OpenAIApiClient(this.errorHandler);
 
     // Chat store
@@ -152,6 +148,13 @@ export class RealtimeClientClass {
     }
   }
 
+  // Allow updating tokenProvider without recreating client
+  setTokenProvider(tp: TokenProvider) {
+    if (typeof tp !== 'function')
+      throw new Error('setTokenProvider: invalid tokenProvider');
+    this.options.tokenProvider = tp;
+  }
+
   private setConnectionState(state: ConnectionState) {
     if (this.connectionState !== state) {
       this.connectionState = state;
@@ -160,6 +163,10 @@ export class RealtimeClientClass {
   }
 
   public getConnectionState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  public getStatus() {
     return this.connectionState;
   }
 
@@ -197,62 +204,124 @@ export class RealtimeClientClass {
     );
   }
 
-  // Event management
   on(type: string, handler: Listener) {
     return this.eventRouter.on(type, handler);
   }
 
-  // Connection management
+  // Pre-connect cleanup to avoid leftover transports if previous session wasn't closed properly
+  private preConnectCleanup() {
+    try {
+      this.dataChannelManager.close();
+    } catch {}
+    try {
+      this.peerConnectionManager.close();
+    } catch {}
+    try {
+      // stop mic/camera if dangling
+      this.mediaManager.cleanup();
+    } catch {}
+    // ВАЖНО: EventRouter/ChatStore не трогаем здесь, чтобы не потерять подписки.
+  }
+
   async connect() {
+    if (this.connecting) {
+      this.errorHandler.handle(
+        'init_peer_connection',
+        new Error('connect() called while connecting'),
+        'warning',
+        true
+      );
+      return;
+    }
+    this.connecting = true;
+
     try {
       this.setConnectionState('connecting');
 
-      const ephemeralKey = await this.options.tokenProvider();
-      if (!ephemeralKey) {
-        throw new Error('Empty ephemeral token');
+      // Очистим возможные «хвосты», если предыдущая сессия не закрылась
+      this.preConnectCleanup();
+
+      // 1) Token
+      let ephemeralKey: string;
+      try {
+        const fn = this.options.tokenProvider;
+        if (typeof fn !== 'function')
+          throw new Error('tokenProvider is not set');
+        ephemeralKey = await fn();
+        if (!ephemeralKey) throw new Error('Empty ephemeral token');
+      } catch (e: any) {
+        this.setConnectionState('error');
+        this.errorHandler.handle('fetch_token', e, 'critical', false);
+        throw e;
       }
 
+      // 2) PeerConnection
       const pc = this.peerConnectionManager.create();
+
+      // 3) Remote stream
       this.mediaManager.setupRemoteStream(pc);
 
+      // 4) Local media
       const stream = await this.mediaManager.getUserMedia();
       this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
 
+      // 5) DataChannel
       this.dataChannelManager.create(pc, async (evt) => {
         await this.eventRouter.processIncomingMessage(evt);
       });
 
+      // 6) Offer
       const offer = await this.peerConnectionManager.createOffer();
       await this.peerConnectionManager.setLocalDescription(offer);
 
+      // 7) ICE
       await this.peerConnectionManager.waitForIceGathering();
 
+      // 8) SDP exchange
       const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
       await this.peerConnectionManager.setRemoteDescription(answer);
     } catch (e: any) {
-      this.setConnectionState('error');
-      this.errorHandler.handle('init_peer_connection', e);
+      if (this.getStatus() !== 'error') {
+        this.setConnectionState('error');
+        this.errorHandler.handle('init_peer_connection', e);
+      }
       throw e;
+    } finally {
+      this.connecting = false;
     }
   }
 
   async disconnect() {
+    if (this.disconnecting) return;
+    this.disconnecting = true;
+
     try {
       this.successHandler.hangUpStarted();
 
-      this.dataChannelManager.close();
-      this.mediaManager.cleanup();
-      this.peerConnectionManager.close();
-      this.eventRouter.cleanup();
-
+      try {
+        this.dataChannelManager.close();
+      } catch {}
+      try {
+        this.mediaManager.cleanup();
+      } catch {}
+      try {
+        this.peerConnectionManager.close();
+      } catch {}
+      try {
+        this.eventRouter.cleanup();
+      } catch {}
       if (this.chatStore) {
-        this.chatStore.destroy();
+        try {
+          this.chatStore.destroy();
+        } catch {}
       }
 
       this.setConnectionState('disconnected');
       this.successHandler.hangUpDone();
     } catch (e: any) {
       this.errorHandler.handle('hangup', e, 'warning', true);
+    } finally {
+      this.disconnecting = false;
     }
   }
 
@@ -309,8 +378,5 @@ export class RealtimeClientClass {
 
   isConnected() {
     return this.connectionState === 'connected';
-  }
-  getStatus() {
-    return this.connectionState;
   }
 }
