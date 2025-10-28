@@ -53,6 +53,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
+    "event-target-shim": "^6.0.2",
     "react-native-webrtc": "^124.0.7"
   },
   "devDependencies": {
