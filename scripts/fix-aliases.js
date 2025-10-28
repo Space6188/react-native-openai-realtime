@@ -7,6 +7,7 @@ function replaceAliasesInFile(filePath, isTypeScript = false) {
 
   // Замена алиасов на относительные пути
   content = content.replace(
+    // eslint-disable-next-line no-useless-escape
     /@react-native-openai-realtime\/([\w\/\-]+)/g,
     (match, modulePath) => {
       const fileDir = path.dirname(filePath);
@@ -25,6 +26,7 @@ function replaceAliasesInFile(filePath, isTypeScript = false) {
       }
 
       // Убираем расширение если оно есть
+
       relativePath = relativePath.replace(/\.(js|ts)$/, '');
 
       return relativePath;
