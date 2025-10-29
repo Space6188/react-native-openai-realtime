@@ -216,10 +216,12 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
         detachChatRef.current();
         detachChatRef.current = null;
       }
-      setChat([]);
-      setAddedMessages([]);
+      if (deleteChatHistoryOnDisconnect) {
+        setChat([]);
+        setAddedMessages([]);
+      }
     }
-  }, []);
+  }, [deleteChatHistoryOnDisconnect]);
 
   // Автоконнект опционально
   useEffect(() => {

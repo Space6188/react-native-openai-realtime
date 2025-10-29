@@ -53,6 +53,8 @@ export class RealtimeClientClass {
 
   // Chat
   private chatStore?: ChatStore;
+  // Флаг, что подписки ChatStore уже навешаны на EventRouter
+  private chatWired = false;
 
   constructor(
     userOptions: RealtimeClientOptionsBeforePrune,
@@ -175,8 +177,10 @@ export class RealtimeClientClass {
     return () => this.connectionListeners.delete(listener);
   }
 
-  private wireChatStore() {
+  // Перевес подписок ChatStore на EventRouter; force=true — принудительно
+  private wireChatStore(force = false) {
     if (!this.chatStore) return;
+    if (this.chatWired && !force) return;
 
     this.on('user:item_started', ({ itemId }) =>
       this.chatStore!.startUser(itemId)
@@ -202,6 +206,8 @@ export class RealtimeClientClass {
     this.on('assistant:completed', ({ responseId, status }) =>
       this.chatStore!.finalize('assistant', responseId, status)
     );
+
+    this.chatWired = true;
   }
 
   on(type: string, handler: Listener) {
@@ -240,6 +246,12 @@ export class RealtimeClientClass {
 
       // Очистим возможные «хвосты», если предыдущая сессия не закрылась
       this.preConnectCleanup();
+
+      // После disconnect() EventRouter.cleanup() очищает подписки.
+      // Восстановим подписки ChatStore перед началом приёма событий.
+      if (this.chatStore && !this.chatWired) {
+        this.wireChatStore(true);
+      }
 
       // 1) Token
       let ephemeralKey: string;
@@ -310,6 +322,9 @@ export class RealtimeClientClass {
       try {
         this.eventRouter.cleanup();
       } catch {}
+      // Подписки EventRouter очищены — отметим, что их нужно перевесить при следующем connect()
+      this.chatWired = false;
+
       if (
         this.options.deleteChatHistoryOnDisconnect !== false &&
         this.chatStore
