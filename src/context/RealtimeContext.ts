@@ -10,6 +10,7 @@ export const RealtimeContext = createContext<RealtimeContextValue>({
   sendResponse: () => {},
   sendResponseStrict: () => {},
   updateSession: () => {},
+  clearChatHistory: () => {},
   sendRaw: () => {},
   addMessage: () => '',
   clearAdded: () => {},

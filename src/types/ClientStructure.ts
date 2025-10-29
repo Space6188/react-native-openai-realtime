@@ -100,6 +100,7 @@ export type RealtimeStatus =
   | 'assistant_speaking';
 
 export type RealtimeClientOptionsBeforePrune = {
+  deleteChatHistoryOnDisconnect?: boolean;
   tokenProvider: TokenProvider;
   voice?: keyof typeof VOICE_IDS;
   webrtc?: {
@@ -135,7 +136,7 @@ export type RealTimeClientProps = {
   // быстрые чат-поведения
   chatUserAddOnDelta?: boolean;
   chatInverted?: boolean;
-
+  deleteChatHistoryOnDisconnect?: boolean;
   chatUserPlaceholderOnStart?: boolean;
   chatAssistantAddOnDelta?: boolean;
   chatAssistantPlaceholderOnStart?: boolean;

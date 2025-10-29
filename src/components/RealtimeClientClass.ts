@@ -310,9 +310,21 @@ export class RealtimeClientClass {
       try {
         this.eventRouter.cleanup();
       } catch {}
-      if (this.chatStore) {
+      if (
+        this.options.deleteChatHistoryOnDisconnect !== false &&
+        this.chatStore
+      ) {
         try {
+          this.options.logger?.debug?.(
+            '[RealtimeClient] Destroying chat history'
+          );
           this.chatStore.destroy();
+        } catch {}
+      } else {
+        try {
+          this.options.logger?.debug?.(
+            '[RealtimeClient] Preserving chat history on disconnect'
+          );
         } catch {}
       }
 
@@ -367,6 +379,15 @@ export class RealtimeClientClass {
 
   getChat() {
     return this.chatStore?.get() ?? [];
+  }
+
+  public clearChatHistory() {
+    if (this.chatStore) {
+      this.options.logger?.info?.(
+        '[RealtimeClient] Manually clearing chat history'
+      );
+      this.chatStore.destroy();
+    }
   }
 
   onChatUpdate(handler: (chat: any[]) => void) {

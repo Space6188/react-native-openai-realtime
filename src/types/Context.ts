@@ -5,6 +5,7 @@ import type { RealtimeClientClass } from '@react-native-openai-realtime/componen
 export type RealtimeContextValue = {
   client: RealtimeClientClass | null;
   status: RealtimeStatus;
+  clearChatHistory: () => void;
   chat: ExtendedChatMsg[];
   connect: () => Promise<void>;
   disconnect: () => Promise<void> | void;

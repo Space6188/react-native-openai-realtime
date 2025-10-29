@@ -1182,13 +1182,6 @@ export class EventRouter {
     this.functionArgsBuffer.clear();
   }
 }
-import { RealtimeClient } from '../index';
-
-describe('RealtimeClient', () => {
-  it('should be defined', () => {
-    expect(RealtimeClient).toBeDefined();
-  });
-});
 import type {
   MiddlewareCtx,
   SpeechActivityState,
@@ -2324,9 +2317,18 @@ export * from './RealtimeClientClass';
 export * from './RealTimeClient';
 import { RealtimeContext } from '@react-native-openai-realtime/context';
 import { useContext } from 'react';
+import type { RealtimeContextValue } from '@react-native-openai-realtime/types';
 
-export function useRealtime() {
-  return useContext(RealtimeContext);
+export function useRealtime(): RealtimeContextValue {
+  // ✅ Получаем контекст
+  const context = useContext(RealtimeContext);
+
+  // ✅ Проверяем, что контекст существует
+  if (!context) {
+    throw new Error('useRealtime must be used within a RealtimeProvider');
+  }
+
+  return context;
 }
 import { useEffect, useRef, useState } from 'react';
 import { useRealtime } from '@react-native-openai-realtime/hooks';

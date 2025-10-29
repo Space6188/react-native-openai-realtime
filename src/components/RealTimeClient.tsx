@@ -41,6 +41,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     onUserTranscriptionCompleted,
     onAssistantTextDelta,
     onAssistantCompleted,
+    deleteChatHistoryOnDisconnect = true,
     onToolCall,
     incomingMiddleware,
     outgoingMiddleware,
@@ -101,6 +102,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
         outgoing: outgoingMiddleware,
       }) as any,
       policy: prune({ isMeaningfulText: policyIsMeaningfulText }),
+      deleteChatHistoryOnDisconnect,
       chat: prune({
         enabled: chatEnabled,
         isMeaningfulText: chatIsMeaningfulText,
@@ -113,6 +115,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     }) as CoreConfig;
   }, [
     tokenProvider,
+    deleteChatHistoryOnDisconnect,
     webrtc,
     media,
     chatInverted,
@@ -273,11 +276,15 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
       : merged.sort((a: any, b: any) => (b.ts ?? 0) - (a.ts ?? 0));
   }, [chat, addedMessages, chatInverted]);
 
+  const clearChatHistory = useCallback(() => {
+    clientRef.current?.clearChatHistory();
+  }, [clientRef]);
   // ВАЖНО: провайдер всегда рендерится — без if (!client) return null
   const value: RealtimeContextValue = useMemo(
     () => ({
       client: clientRef.current,
       status,
+      clearChatHistory,
       chat: mergedChat,
       connect,
       disconnect,
@@ -293,7 +300,15 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
       addMessage,
       clearAdded,
     }),
-    [status, mergedChat, connect, disconnect, addMessage, clearAdded]
+    [
+      status,
+      mergedChat,
+      connect,
+      disconnect,
+      addMessage,
+      clearAdded,
+      clearChatHistory,
+    ]
   );
 
   const renderedChildren =
