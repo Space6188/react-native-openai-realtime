@@ -65,7 +65,9 @@
     "@react-native/babel-preset": "0.81.1",
     "@react-native/eslint-config": "^0.81.1",
     "@release-it/conventional-changelog": "^10.0.1",
-    "@types/jest": "^29.5.14",
+    "@testing-library/jest-native": "^5.4.3",
+    "@testing-library/react-native": "^13.3.3",
+    "@types/jest": "^29.5.13",
     "@types/react": "^19.1.12",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
     "babel-plugin-module-resolver": "^5.0.2",
@@ -82,23 +84,18 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-builder-bob": "^0.40.13",
+    "react-test-renderer": "19.1.0",
     "release-it": "^19.0.4",
+    "ts-node": "^10.9.2",
     "tsc-alias": "^1.8.16",
     "typescript": "^5.9.2"
+  },
+  "overrides": {
+    "react-test-renderer": "19.1.0"
   },
   "peerDependencies": {
     "react": "*",
     "react-native": "*"
-  },
-  "jest": {
-    "preset": "react-native",
-    "modulePathIgnorePatterns": [
-      "<rootDir>/example/node_modules",
-      "<rootDir>/lib/"
-    ],
-    "moduleNameMapper": {
-      "^@react-native-openai-realtime/(.*)$": "<rootDir>/src/$1"
-    }
   },
   "commitlint": {
     "extends": [

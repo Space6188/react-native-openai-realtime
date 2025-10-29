@@ -2038,53 +2038,54 @@ import { prune } from '@react-native-openai-realtime/helpers';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-export const RealTimeClient: FC<RealTimeClientProps> = ({
-  tokenProvider,
-  webrtc,
-  media,
-  chatInverted,
-  session,
-  autoSessionUpdate,
-  greetEnabled,
-  greetInstructions,
-  greetModalities,
-  onOpen,
-  onEvent,
-  onError,
-  onUserTranscriptionDelta,
-  onUserTranscriptionCompleted,
-  onAssistantTextDelta,
-  onAssistantCompleted,
-  onToolCall,
-  incomingMiddleware,
-  outgoingMiddleware,
-  policyIsMeaningfulText,
-  chatEnabled,
-  chatIsMeaningfulText,
-  logger,
-  autoConnect = true,
-  attachChat = true,
-  children,
-  chatUserAddOnDelta,
-  chatUserPlaceholderOnStart,
-  chatAssistantAddOnDelta,
-  chatAssistantPlaceholderOnStart,
-}) => {
-  const clientRef = useRef<RealtimeClientClass | null>(null);
-  const detachChatRef = useRef<null | (() => void)>(null);
-  const connectionUnsubRef = useRef<(() => void) | null>(null);
+export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
+  const {
+    tokenProvider,
+    webrtc,
+    media,
+    chatInverted,
+    session,
+    autoSessionUpdate,
+    greetEnabled,
+    greetInstructions,
+    greetModalities,
+    onOpen,
+    onEvent,
+    onError,
+    onUserTranscriptionDelta,
+    onUserTranscriptionCompleted,
+    onAssistantTextDelta,
+    onAssistantCompleted,
+    onToolCall,
+    incomingMiddleware,
+    outgoingMiddleware,
+    policyIsMeaningfulText,
+    chatEnabled,
+    chatIsMeaningfulText,
+    logger,
+    autoConnect = false,
+    attachChat = true,
+    children,
+    chatUserAddOnDelta,
+    chatUserPlaceholderOnStart,
+    chatAssistantAddOnDelta,
+    chatAssistantPlaceholderOnStart,
+  } = props;
 
-  const [connectionState, setConnectionState] = useState<
+  const clientRef = useRef<RealtimeClientClass | null>(null);
+  const connectionUnsubRef = useRef<(() => void) | null>(null);
+  const detachChatRef = useRef<null | (() => void)>(null);
+
+  const [status, setStatus] = useState<
     'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
   >('idle');
-
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
   // Snapshot опций (не создаёт клиента)
-  const clientOptions: CoreConfig = useMemo(() => {
-    const topLevel: CoreConfig = prune({
-      tokenProvider, // может обновляться — мы прокинем в клиент через setTokenProvider
+  const optionsSnapshot: CoreConfig = useMemo(() => {
+    return prune({
+      tokenProvider,
       webrtc,
       media,
       chatInverted,
@@ -2125,14 +2126,8 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       }),
       logger,
     }) as CoreConfig;
-
-    return topLevel;
   }, [
     tokenProvider,
-    chatUserAddOnDelta,
-    chatUserPlaceholderOnStart,
-    chatAssistantAddOnDelta,
-    chatAssistantPlaceholderOnStart,
     webrtc,
     media,
     chatInverted,
@@ -2155,43 +2150,37 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     chatEnabled,
     chatIsMeaningfulText,
     logger,
+    chatUserAddOnDelta,
+    chatUserPlaceholderOnStart,
+    chatAssistantAddOnDelta,
+    chatAssistantPlaceholderOnStart,
   ]);
 
-  // Создаём клиент ОДИН раз при монтировании
-  useEffect(() => {
+  // Создаём клиента лениво
+  const ensureClient = useCallback(() => {
     if (!clientRef.current) {
-      if (!clientOptions.tokenProvider) {
-        // Не создаём клиента без токен-провайдера — пусть connect() выкинет понятную ошибку
-        clientRef.current = new RealtimeClientClass(
-          clientOptions as RealtimeClientOptionsBeforePrune
-        );
-      } else {
-        clientRef.current = new RealtimeClientClass(
-          clientOptions as RealtimeClientOptionsBeforePrune
-        );
-      }
+      clientRef.current = new RealtimeClientClass(
+        optionsSnapshot as RealtimeClientOptionsBeforePrune
+      );
 
-      // Подписка на изменения connectionState
-      setConnectionState(clientRef.current.getConnectionState());
-      const unsub = clientRef.current.onConnectionStateChange((state) =>
-        setConnectionState(state)
+      // Подписка на статус
+      setStatus(clientRef.current.getConnectionState());
+      const unsub = clientRef.current.onConnectionStateChange((s) =>
+        setStatus(s)
       );
       connectionUnsubRef.current = unsub;
-    }
 
-    // Отписка по размонтированию
-    return () => {
-      if (connectionUnsubRef.current) {
-        connectionUnsubRef.current();
-        connectionUnsubRef.current = null;
+      // Прокинем tokenProvider, если обновится
+      if (tokenProvider) {
+        try {
+          clientRef.current.setTokenProvider(tokenProvider);
+        } catch {}
       }
-      // Важно: при размонтировании разрываем соединение, чтобы при перезапуске не висели ресурсы
-      clientRef.current?.disconnect().catch(() => {});
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    }
+    return clientRef.current!;
+  }, [optionsSnapshot, tokenProvider]);
 
-  // Обновляем токен-провайдер в уже созданном клиенте
+  // Обновляем tokenProvider внутри уже созданного клиента
   useEffect(() => {
     if (clientRef.current && tokenProvider) {
       try {
@@ -2200,7 +2189,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     }
   }, [tokenProvider]);
 
-  // Разрываем соединение при уходе в фон/закрытии (background/inactive)
+  // Разрываем соединение при уходе в фон
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background' || state === 'inactive') {
@@ -2211,11 +2200,8 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     return () => sub.remove();
   }, []);
 
-  const client = clientRef.current;
-
   const connect = useCallback(async () => {
-    if (!client) return;
-
+    const client = ensureClient();
     try {
       if (attachChat && !detachChatRef.current) {
         const isMeaningful =
@@ -2228,12 +2214,12 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       }
       await client.connect();
     } catch (e) {
-      // статус уже переведён в 'error' внутри клиента при проблеме с токеном/rtc
       throw e;
     }
-  }, [client, attachChat, chatIsMeaningfulText, policyIsMeaningfulText]);
+  }, [ensureClient, attachChat, chatIsMeaningfulText, policyIsMeaningfulText]);
 
   const disconnect = useCallback(async () => {
+    const client = clientRef.current;
     if (!client) return;
     try {
       await client.disconnect();
@@ -2245,11 +2231,11 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       setChat([]);
       setAddedMessages([]);
     }
-  }, [client]);
+  }, []);
 
-  // Автоконнект
+  // Автоконнект опционально
   useEffect(() => {
-    if (!autoConnect || !client) return;
+    if (!autoConnect) return;
     connect().catch(() => {});
     return () => {
       disconnect().catch(() => {});
@@ -2257,6 +2243,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoConnect]);
 
+  // Нормализация пользовательских UI-сообщений
   const normalize = useCallback((m: AddableMessage): ExtendedChatMsg => {
     const base = {
       id: m.id ?? makeId(),
@@ -2301,36 +2288,28 @@ export const RealTimeClient: FC<RealTimeClientProps> = ({
       : merged.sort((a: any, b: any) => (b.ts ?? 0) - (a.ts ?? 0));
   }, [chat, addedMessages, chatInverted]);
 
+  // ВАЖНО: провайдер всегда рендерится — без if (!client) return null
   const value: RealtimeContextValue = useMemo(
     () => ({
-      client,
-      status: connectionState,
+      client: clientRef.current,
+      status,
       chat: mergedChat,
       connect,
       disconnect,
-      sendResponse: (opts?: any) => client?.sendResponse(opts),
+      sendResponse: (opts?: any) => clientRef.current?.sendResponse(opts),
       sendResponseStrict: (opts: {
         instructions: string;
         modalities?: Array<'audio' | 'text'>;
         conversation?: 'default' | 'none';
-      }) => client?.sendResponseStrict(opts),
-      updateSession: (patch: Partial<any>) => client?.updateSession(patch),
-      sendRaw: (e: any) => client?.sendRaw(e),
+      }) => clientRef.current?.sendResponseStrict(opts),
+      updateSession: (patch: Partial<any>) =>
+        clientRef.current?.updateSession(patch),
+      sendRaw: (e: any) => clientRef.current?.sendRaw(e),
       addMessage,
       clearAdded,
     }),
-    [
-      client,
-      connectionState,
-      mergedChat,
-      connect,
-      disconnect,
-      addMessage,
-      clearAdded,
-    ]
+    [status, mergedChat, connect, disconnect, addMessage, clearAdded]
   );
-
-  if (!client) return null;
 
   const renderedChildren =
     typeof children === 'function' ? (children as any)(value) : children;

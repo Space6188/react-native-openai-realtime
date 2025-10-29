@@ -31,7 +31,7 @@
 
     "types": ["react", "react-native"]
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "__mocks__", "__tests__"],
   "exclude": [
     "lib",
     "node_modules",
