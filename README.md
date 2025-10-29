@@ -1,6 +1,6 @@
 # react-native-openai-realtime — Полная документация
 
-## Библиотека - готовый каркас для голосового/текстового чата с OpenAI Realtime (WebRTC + DataChannel) в React Native. Внутри: провайдер с контекстом, Realtime-клиент, хуки, middleware, маршрутизация событий, встроенный чат, утилиты для речи (VAD), и низкоуровневый доступ к WebRTC/потокам/каналу данных.
+**Библиотека - готовый каркас для голосового/текстового чата с OpenAI Realtime (WebRTC + DataChannel) в React Native.**
 
 ## Содержание
 
