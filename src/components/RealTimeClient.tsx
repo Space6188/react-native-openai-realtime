@@ -25,9 +25,8 @@ import { prune } from '@react-native-openai-realtime/helpers';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-// Публичный интерфейс для ref
+// Императивный интерфейс провайдера
 export type RealTimeClientHandle = {
-  // статусы/ссылки
   getClient: () => RealtimeClientClass | null;
   getStatus: () =>
     | 'idle'
@@ -37,11 +36,9 @@ export type RealTimeClientHandle = {
     | 'error';
   setTokenProvider: (tp: TokenProvider) => void;
 
-  // соединение
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
 
-  // отправка
   sendRaw: (e: any) => Promise<void> | void;
   sendResponse: (opts?: any) => void;
   sendResponseStrict: (opts: {
@@ -51,10 +48,12 @@ export type RealTimeClientHandle = {
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
-  // чат (локальные UI-бабблы и история)
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
   clearAdded: () => void;
   clearChatHistory: () => void;
+
+  // опционально: получить следующий корректный ts
+  getNextTs: () => number;
 };
 
 export const RealTimeClient = forwardRef<
@@ -105,7 +104,7 @@ export const RealTimeClient = forwardRef<
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
-  // Snapshot опций (не создаёт клиента)
+  // Собираем snapshot опций (прежнее поведение)
   const optionsSnapshot: CoreConfig = useMemo(() => {
     return prune({
       tokenProvider,
@@ -181,21 +180,19 @@ export const RealTimeClient = forwardRef<
     chatAssistantPlaceholderOnStart,
   ]);
 
-  // Создаём клиента лениво
+  // Создание клиента лениво
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
       clientRef.current = new RealtimeClientClass(
         optionsSnapshot as RealtimeClientOptionsBeforePrune
       );
 
-      // Подписка на статус
       setStatus(clientRef.current.getConnectionState());
       const unsub = clientRef.current.onConnectionStateChange((s) =>
         setStatus(s)
       );
       connectionUnsubRef.current = unsub;
 
-      // Прокинем tokenProvider, если обновится
       if (tokenProvider) {
         try {
           clientRef.current.setTokenProvider(tokenProvider);
@@ -214,7 +211,7 @@ export const RealTimeClient = forwardRef<
     }
   }, [tokenProvider]);
 
-  // Разрываем соединение при уходе в фон
+  // Фон → disconnect
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background' || state === 'inactive') {
@@ -225,6 +222,7 @@ export const RealTimeClient = forwardRef<
     return () => sub.remove();
   }, []);
 
+  // Подключение/отключение
   const connect = useCallback(async () => {
     const client = ensureClient();
     try {
@@ -260,7 +258,7 @@ export const RealTimeClient = forwardRef<
     }
   }, [deleteChatHistoryOnDisconnect]);
 
-  // Автоконнект опционально
+  // Автоконнект
   useEffect(() => {
     if (!autoConnect) return;
     connect().catch(() => {});
@@ -270,30 +268,56 @@ export const RealTimeClient = forwardRef<
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoConnect]);
 
-  // Нормализация пользовательских UI-сообщений
-  const normalize = useCallback((m: AddableMessage): ExtendedChatMsg => {
-    const base = {
-      id: m.id ?? makeId(),
-      role: m.role ?? 'assistant',
-      ts: m.ts ?? Date.now(),
-    };
-    if (
-      (m as any).type === 'ui' ||
-      ('kind' in (m as any) && 'payload' in (m as any))
-    ) {
+  // Считаем nextTs на основе текущей ленты (встроенный чат + ваши добавленные)
+  const getNextTs = useCallback((): number => {
+    try {
+      const chatMax =
+        (chat?.length ? Math.max(...chat.map((m: any) => m?.ts ?? 0)) : 0) || 0;
+      const addedMax =
+        (addedMessages?.length
+          ? Math.max(...addedMessages.map((m: any) => m?.ts ?? 0))
+          : 0) || 0;
+      const maxTs = Math.max(chatMax, addedMax);
+      return maxTs > 0 ? maxTs + 1 : Date.now();
+    } catch {
+      return Date.now();
+    }
+  }, [chat, addedMessages]);
+
+  // Нормализация пользовательских сообщений — ВАЖНО: синхронизируем time/ts/статус
+  const normalize = useCallback(
+    (m: AddableMessage): ExtendedChatMsg => {
+      const base = {
+        id: (m as any).id ?? makeId(),
+        role: (m as any).role ?? 'assistant',
+        // Синхрон с ChatStore: ts — монотонный порядок
+        ts: (m as any).ts ?? getNextTs(),
+        // time обязателен и в ChatMsg, и в UIChatMsg
+        time: Date.now(),
+      };
+
+      if (
+        (m as any).type === 'ui' ||
+        ('kind' in (m as any) && 'payload' in (m as any))
+      ) {
+        return {
+          ...base,
+          type: 'ui',
+          kind: (m as any).kind,
+          payload: (m as any).payload,
+        } as unknown as ExtendedChatMsg;
+      }
+
+      // Локальный text-баббл: ставим статус 'done', чтобы удовлетворить ChatMsg
       return {
         ...base,
-        type: 'ui',
-        kind: (m as any).kind,
-        payload: (m as any).payload,
-      } as ExtendedChatMsg;
-    }
-    return {
-      ...base,
-      type: 'text',
-      text: (m as any).text ?? '',
-    } as unknown as ExtendedChatMsg;
-  }, []);
+        type: 'text',
+        text: (m as any).text ?? '',
+        status: 'done',
+      } as unknown as ExtendedChatMsg;
+    },
+    [getNextTs]
+  );
 
   const addMessage = useCallback(
     (m: AddableMessage | AddableMessage[]) => {
@@ -319,7 +343,7 @@ export const RealTimeClient = forwardRef<
     clientRef.current?.clearChatHistory();
   }, []);
 
-  // ВАЖНО: провайдер всегда рендерится — без if (!client) return null
+  // Контекст — без изменений
   const value: RealtimeContextValue = useMemo(
     () => ({
       client: clientRef.current,
@@ -351,10 +375,10 @@ export const RealTimeClient = forwardRef<
     ]
   );
 
-  // Императивный API через ref
+  // Императивный API
   useImperativeHandle(
     ref,
-    (): RealTimeClientHandle => ({
+    () => ({
       getClient: () => clientRef.current,
       getStatus: () => status,
       setTokenProvider: (tp: TokenProvider) => {
@@ -372,11 +396,21 @@ export const RealTimeClient = forwardRef<
       sendResponse: (opts?: any) => clientRef.current?.sendResponse(opts),
       sendResponseStrict: (opts) => clientRef.current?.sendResponseStrict(opts),
       updateSession: (patch) => clientRef.current?.updateSession(patch),
-      clearChatHistory,
+
       addMessage,
       clearAdded,
+      clearChatHistory,
+      getNextTs,
     }),
-    [status, connect, disconnect, clearChatHistory, addMessage, clearAdded]
+    [
+      status,
+      connect,
+      disconnect,
+      addMessage,
+      clearAdded,
+      clearChatHistory,
+      getNextTs,
+    ]
   );
 
   const renderedChildren =
