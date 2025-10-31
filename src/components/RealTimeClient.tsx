@@ -26,7 +26,6 @@ import { prune } from '@react-native-openai-realtime/helpers';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-// Императивный интерфейс провайдера
 export type RealTimeClientHandle = {
   getClient: () => RealtimeClientClass | null;
   getStatus: () =>
@@ -49,7 +48,6 @@ export type RealTimeClientHandle = {
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
-  // Новые
   getMode: () => 'voice' | 'text';
   switchMode: (mode: 'voice' | 'text') => Promise<void>;
   sendTextMessage: (
@@ -64,8 +62,6 @@ export type RealTimeClientHandle = {
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
   clearAdded: () => void;
   clearChatHistory: () => void;
-
-  // опционально: следующий корректный ts
   getNextTs: () => number;
 };
 
@@ -109,6 +105,7 @@ export const RealTimeClient = forwardRef<
     // Новые пропсы
     initialMode = 'voice',
     onModeChange,
+    allowConnectWithoutMic = true,
   } = props;
 
   const clientRef = useRef<RealtimeClientClass | null>(null);
@@ -122,7 +119,6 @@ export const RealTimeClient = forwardRef<
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
-  // Snapshot опций
   const optionsSnapshot: CoreConfig = useMemo(() => {
     return prune({
       tokenProvider,
@@ -166,6 +162,9 @@ export const RealTimeClient = forwardRef<
         assistantPlaceholderOnStart: chatAssistantPlaceholderOnStart,
       }),
       logger,
+
+      // НОВОЕ: пробрасываем флаг в ядро
+      allowConnectWithoutMic,
     }) as CoreConfig;
   }, [
     tokenProvider,
@@ -196,9 +195,9 @@ export const RealTimeClient = forwardRef<
     chatUserPlaceholderOnStart,
     chatAssistantAddOnDelta,
     chatAssistantPlaceholderOnStart,
+    allowConnectWithoutMic,
   ]);
 
-  // Ленивая инициализация клиента
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
       clientRef.current = new RealtimeClientClass(
@@ -220,7 +219,6 @@ export const RealTimeClient = forwardRef<
     return clientRef.current!;
   }, [optionsSnapshot, tokenProvider]);
 
-  // Обновляем tokenProvider на лету
   useEffect(() => {
     if (clientRef.current && tokenProvider) {
       try {
@@ -229,7 +227,6 @@ export const RealTimeClient = forwardRef<
     }
   }, [tokenProvider]);
 
-  // Приложение в фон — отключаемся
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background' || state === 'inactive') {
@@ -240,7 +237,6 @@ export const RealTimeClient = forwardRef<
     return () => sub.remove();
   }, []);
 
-  // Подключение
   const connect = useCallback(async () => {
     const client = ensureClient();
     try {
@@ -259,7 +255,6 @@ export const RealTimeClient = forwardRef<
     }
   }, [ensureClient, attachChat, chatIsMeaningfulText, policyIsMeaningfulText]);
 
-  // Отключение
   const disconnect = useCallback(async () => {
     const client = clientRef.current;
     if (!client) return;
@@ -277,17 +272,14 @@ export const RealTimeClient = forwardRef<
     }
   }, [deleteChatHistoryOnDisconnect]);
 
-  // Автоконнект
   useEffect(() => {
     if (!autoConnect) return;
     connect().catch(() => {});
     return () => {
       disconnect().catch(() => {});
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnect]);
+  }, [autoConnect, connect, disconnect]);
 
-  // Применяем initialMode после подключения
   useEffect(() => {
     if (status === 'connected' && clientRef.current) {
       if (initialMode === 'text') {
@@ -303,10 +295,8 @@ export const RealTimeClient = forwardRef<
         onModeChange?.('voice');
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [status, initialMode, onModeChange]);
 
-  // Подсчёт nextTs для локальных UI сообщений
   const getNextTs = useCallback((): number => {
     try {
       const chatMax =
@@ -322,7 +312,6 @@ export const RealTimeClient = forwardRef<
     }
   }, [chat, addedMessages]);
 
-  // Нормализация локальных UI сообщений
   const normalize = useCallback(
     (m: AddableMessage): ExtendedChatMsg => {
       const base = {
@@ -378,7 +367,6 @@ export const RealTimeClient = forwardRef<
     clientRef.current?.clearChatHistory();
   }, []);
 
-  // Новые фичи: режимы
   const switchMode = useCallback(
     async (newMode: ChatMode) => {
       await clientRef.current?.switchMode(newMode);
@@ -402,7 +390,6 @@ export const RealTimeClient = forwardRef<
     []
   );
 
-  // Контекст
   const value: RealtimeContextValue = useMemo(
     () => ({
       client: clientRef.current,
@@ -423,7 +410,6 @@ export const RealTimeClient = forwardRef<
       addMessage,
       clearAdded,
 
-      // Новые поля
       mode,
       switchMode,
       sendTextMessage,
@@ -442,7 +428,6 @@ export const RealTimeClient = forwardRef<
     ]
   );
 
-  // Императивный API
   useImperativeHandle(
     ref,
     () => ({

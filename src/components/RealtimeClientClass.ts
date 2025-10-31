@@ -32,15 +32,12 @@ type ConnectionListener = (state: ConnectionState) => void;
 export class RealtimeClientClass {
   private options: RealtimeClientOptionsBeforePrune;
 
-  // Connection state
   private connectionState: ConnectionState = 'idle';
   private connectionListeners = new Set<ConnectionListener>();
 
-  // Concurrency guards
   private connecting = false;
   private disconnecting = false;
 
-  // Managers
   private peerConnectionManager: PeerConnectionManager;
   private mediaManager: MediaManager;
   private dataChannelManager: DataChannelManager;
@@ -48,15 +45,12 @@ export class RealtimeClientClass {
   private eventRouter: EventRouter;
   private apiClient: OpenAIApiClient;
 
-  // Handlers
   private errorHandler: ErrorHandler;
   private successHandler: SuccessHandler;
 
-  // Chat
   private chatStore?: ChatStore;
   private chatWired = false;
 
-  // Режим чата
   private currentMode: ChatMode = 'voice';
 
   constructor(
@@ -109,7 +103,6 @@ export class RealtimeClientClass {
     this.successHandler =
       success ?? new SuccessHandler(callbacks as any, undefined);
 
-    // Managers
     this.peerConnectionManager = new PeerConnectionManager(
       this.options,
       this.errorHandler,
@@ -137,7 +130,6 @@ export class RealtimeClientClass {
     );
     this.apiClient = new OpenAIApiClient(this.errorHandler);
 
-    // Chat store
     if (this.options.chat?.enabled !== false) {
       this.chatStore = new ChatStore({
         isMeaningfulText:
@@ -153,7 +145,6 @@ export class RealtimeClientClass {
     }
   }
 
-  // Режимы
   public getMode(): ChatMode {
     return this.currentMode;
   }
@@ -170,7 +161,6 @@ export class RealtimeClientClass {
         return;
       }
 
-      // Включаем/выключаем микрофонные треки
       const local = this.mediaManager.getLocalStream?.();
       if (local && typeof local.getAudioTracks === 'function') {
         local.getAudioTracks().forEach((t: any) => {
@@ -178,7 +168,6 @@ export class RealtimeClientClass {
         });
       }
 
-      // Обновляем VAD: включаем для voice, отключаем для text
       const patch: any = {};
       if (mode === 'voice') {
         const td = this.options.session?.turn_detection ?? {
@@ -189,7 +178,7 @@ export class RealtimeClientClass {
         };
         patch.turn_detection = td;
       } else {
-        patch.turn_detection = undefined; // корректное выключение VAD
+        patch.turn_detection = undefined;
       }
 
       await this.sendRaw({ type: 'session.update', session: patch });
@@ -204,7 +193,6 @@ export class RealtimeClientClass {
     }
   }
 
-  // Allow updating tokenProvider without recreating client
   setTokenProvider(tp: TokenProvider) {
     if (typeof tp !== 'function')
       throw new Error('setTokenProvider: invalid tokenProvider');
@@ -231,7 +219,6 @@ export class RealtimeClientClass {
     return () => this.connectionListeners.delete(listener);
   }
 
-  // Подписки ChatStore на router
   private wireChatStore(force = false) {
     if (!this.chatStore) return;
     if (this.chatWired && !force) return;
@@ -321,9 +308,38 @@ export class RealtimeClientClass {
       // 3) Remote stream
       this.mediaManager.setupRemoteStream(pc);
 
-      // 4) Local media
-      const stream = await this.mediaManager.getUserMedia();
-      this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
+      // 4) Local media — пробуем взять микрофон; если нет — fallback recvonly
+      let gotLocal = false;
+      try {
+        const stream = await this.mediaManager.getUserMedia();
+        this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
+        gotLocal = true;
+      } catch (e: any) {
+        this.errorHandler.handle('get_user_media', e, 'warning', true);
+        if (this.options.allowConnectWithoutMic !== false) {
+          try {
+            // @ts-ignore
+            if (typeof (pc as any).addTransceiver === 'function') {
+              // audio recvonly — получать звук ассистента без локального микрофона
+              // @ts-ignore
+              (pc as any).addTransceiver('audio', { direction: 'recvonly' });
+              this.successHandler.iosTransceiverSetted?.();
+              this.options.logger?.info?.(
+                '[RealtimeClient] Using recvonly audio (no local mic permission)'
+              );
+            } else {
+              this.options.logger?.warn?.(
+                '[RealtimeClient] addTransceiver not available; continue without local tracks'
+              );
+            }
+          } catch (e2: any) {
+            this.errorHandler.handle('ios_transceiver', e2, 'warning', true);
+          }
+        } else {
+          // если явно запретили fallback — пробрасываем ошибку
+          throw e;
+        }
+      }
 
       // 5) DataChannel
       this.dataChannelManager.create(pc, async (evt) => {
@@ -400,7 +416,6 @@ export class RealtimeClientClass {
     }
   }
 
-  // Messaging
   async sendRaw(event: any): Promise<void> {
     return this.messageSender.sendRaw(event);
   }
@@ -423,7 +438,7 @@ export class RealtimeClientClass {
     this.messageSender.sendToolOutput(call_id, output);
   }
 
-  // Новый метод: отправка текстового сообщения
+  // Текст
   public async sendTextMessage(
     text: string,
     options?: {
@@ -436,7 +451,6 @@ export class RealtimeClientClass {
     if (!msg) return;
     if (!this.isConnected()) throw new Error('Not connected');
 
-    // 1) Добавляем юзер-ввод в общий conversation
     await this.sendRaw({
       type: 'conversation.item.create',
       item: {
@@ -446,7 +460,6 @@ export class RealtimeClientClass {
       },
     });
 
-    // 2) Просим ответ с нужной модальностью
     const modality =
       options?.responseModality ??
       (this.currentMode === 'text' ? 'text' : 'audio');
@@ -459,7 +472,6 @@ export class RealtimeClientClass {
     });
   }
 
-  // Getters
   getPeerConnection() {
     return this.peerConnectionManager.getPeerConnection();
   }

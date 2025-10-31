@@ -134,6 +134,9 @@ export type RealtimeClientOptionsBeforePrune = {
   };
   chat?: ChatOptions;
   logger?: Logger;
+
+  // НОВОЕ: позволять подключаться без микрофона (fallback recvonly)
+  allowConnectWithoutMic?: boolean; // default: true (если не задано)
 };
 
 // ЕДИНЫЕ ПУБЛИЧНЫЕ ПРОПСЫ
@@ -189,6 +192,9 @@ export type RealTimeClientProps = {
   // Новые пропсы для режимов
   initialMode?: ChatMode;
   onModeChange?: (mode: ChatMode) => void;
+
+  // НОВОЕ: позволять подключаться без микрофона
+  allowConnectWithoutMic?: boolean;
 
   children?: React.ReactNode | ((ctx: RealtimeContextValue) => React.ReactNode);
 };
