@@ -17,6 +17,7 @@ import type {
   ResponseCreateParams,
   ResponseCreateStrict,
   TokenProvider,
+  ChatMode,
 } from '@react-native-openai-realtime/types';
 
 type Listener = (payload: any) => void;
@@ -53,8 +54,10 @@ export class RealtimeClientClass {
 
   // Chat
   private chatStore?: ChatStore;
-  // Флаг, что подписки ChatStore уже навешаны на EventRouter
   private chatWired = false;
+
+  // Режим чата
+  private currentMode: ChatMode = 'voice';
 
   constructor(
     userOptions: RealtimeClientOptionsBeforePrune,
@@ -150,6 +153,57 @@ export class RealtimeClientClass {
     }
   }
 
+  // Режимы
+  public getMode(): ChatMode {
+    return this.currentMode;
+  }
+
+  public async switchMode(mode: ChatMode): Promise<void> {
+    try {
+      if (!this.isConnected()) {
+        throw new Error('switchMode: not connected');
+      }
+      if (this.currentMode === mode) {
+        this.options.logger?.debug?.(
+          `[RealtimeClient] Already in ${mode} mode`
+        );
+        return;
+      }
+
+      // Включаем/выключаем микрофонные треки
+      const local = this.mediaManager.getLocalStream?.();
+      if (local && typeof local.getAudioTracks === 'function') {
+        local.getAudioTracks().forEach((t: any) => {
+          t.enabled = mode === 'voice';
+        });
+      }
+
+      // Обновляем VAD: включаем для voice, отключаем для text
+      const patch: any = {};
+      if (mode === 'voice') {
+        const td = this.options.session?.turn_detection ?? {
+          type: 'server_vad',
+          threshold: 0.5,
+          silence_duration_ms: 700,
+          prefix_padding_ms: 300,
+        };
+        patch.turn_detection = td;
+      } else {
+        patch.turn_detection = undefined; // корректное выключение VAD
+      }
+
+      await this.sendRaw({ type: 'session.update', session: patch });
+
+      this.currentMode = mode;
+      this.options.logger?.info?.(`[RealtimeClient] Mode -> ${mode}`);
+    } catch (e: any) {
+      this.errorHandler.handle('init_peer_connection', e, 'warning', true, {
+        mode,
+      });
+      throw e;
+    }
+  }
+
   // Allow updating tokenProvider without recreating client
   setTokenProvider(tp: TokenProvider) {
     if (typeof tp !== 'function')
@@ -177,7 +231,7 @@ export class RealtimeClientClass {
     return () => this.connectionListeners.delete(listener);
   }
 
-  // Перевес подписок ChatStore на EventRouter; force=true — принудительно
+  // Подписки ChatStore на router
   private wireChatStore(force = false) {
     if (!this.chatStore) return;
     if (this.chatWired && !force) return;
@@ -214,7 +268,6 @@ export class RealtimeClientClass {
     return this.eventRouter.on(type, handler);
   }
 
-  // Pre-connect cleanup to avoid leftover transports if previous session wasn't closed properly
   private preConnectCleanup() {
     try {
       this.dataChannelManager.close();
@@ -223,10 +276,8 @@ export class RealtimeClientClass {
       this.peerConnectionManager.close();
     } catch {}
     try {
-      // stop mic/camera if dangling
       this.mediaManager.cleanup();
     } catch {}
-    // ВАЖНО: EventRouter/ChatStore не трогаем здесь, чтобы не потерять подписки.
   }
 
   async connect() {
@@ -244,11 +295,8 @@ export class RealtimeClientClass {
     try {
       this.setConnectionState('connecting');
 
-      // Очистим возможные «хвосты», если предыдущая сессия не закрылась
       this.preConnectCleanup();
 
-      // После disconnect() EventRouter.cleanup() очищает подписки.
-      // Восстановим подписки ChatStore перед началом приёма событий.
       if (this.chatStore && !this.chatWired) {
         this.wireChatStore(true);
       }
@@ -322,7 +370,7 @@ export class RealtimeClientClass {
       try {
         this.eventRouter.cleanup();
       } catch {}
-      // Подписки EventRouter очищены — отметим, что их нужно перевесить при следующем connect()
+
       this.chatWired = false;
 
       if (
@@ -352,7 +400,7 @@ export class RealtimeClientClass {
     }
   }
 
-  // Message sending
+  // Messaging
   async sendRaw(event: any): Promise<void> {
     return this.messageSender.sendRaw(event);
   }
@@ -373,6 +421,42 @@ export class RealtimeClientClass {
 
   sendToolOutput(call_id: string, output: any) {
     this.messageSender.sendToolOutput(call_id, output);
+  }
+
+  // Новый метод: отправка текстового сообщения
+  public async sendTextMessage(
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'default' | 'none';
+    }
+  ): Promise<void> {
+    const msg = (text ?? '').trim();
+    if (!msg) return;
+    if (!this.isConnected()) throw new Error('Not connected');
+
+    // 1) Добавляем юзер-ввод в общий conversation
+    await this.sendRaw({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: msg }],
+      },
+    });
+
+    // 2) Просим ответ с нужной модальностью
+    const modality =
+      options?.responseModality ??
+      (this.currentMode === 'text' ? 'text' : 'audio');
+
+    this.sendResponseStrict({
+      instructions:
+        options?.instructions ?? 'Ответь на сообщение пользователя.',
+      modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
+      conversation: options?.conversation ?? 'default',
+    });
   }
 
   // Getters

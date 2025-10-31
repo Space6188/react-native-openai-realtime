@@ -6,6 +6,7 @@ import type {
   ChatOptions,
 } from '@react-native-openai-realtime/types';
 import { RealtimeClientClass } from '@react-native-openai-realtime/components';
+
 export type RTCIceServer = {
   credential?: string;
   url?: string;
@@ -23,6 +24,9 @@ export type RTCConfiguration = {
 
 export type TokenProvider = () => Promise<string>;
 
+// Новый тип для режима чата
+export type ChatMode = 'voice' | 'text';
+
 export type SessionConfig = {
   model?: string;
   voice?: VoiceId;
@@ -32,7 +36,7 @@ export type SessionConfig = {
     silence_duration_ms?: number;
     threshold?: number;
     prefix_padding_ms?: number;
-  };
+  } | null;
   input_audio_transcription?: { model: string; language?: string };
   tools?: any[];
   instructions?: string;
@@ -73,8 +77,9 @@ export type RealtimeClientHooks = {
 export type MiddlewareCtx = {
   event: any;
   send: (e: any) => void | Promise<void>;
-  client: RealtimeClientClass; // RealtimeClientClass
+  client: RealtimeClientClass;
 };
+
 export type IncomingMiddleware = (
   ctx: MiddlewareCtx
 ) => Promise<any | 'stop' | null | void> | any | 'stop' | null | void;
@@ -131,7 +136,7 @@ export type RealtimeClientOptionsBeforePrune = {
   logger?: Logger;
 };
 
-// ЕДИНЫЕ ПУБЛИЧНЫЕ ПРОПСЫ (теперь это единственный канонический тип)
+// ЕДИНЫЕ ПУБЛИЧНЫЕ ПРОПСЫ
 export type RealTimeClientProps = {
   // быстрые чат-поведения
   chatUserAddOnDelta?: boolean;
@@ -141,7 +146,7 @@ export type RealTimeClientProps = {
   chatAssistantAddOnDelta?: boolean;
   chatAssistantPlaceholderOnStart?: boolean;
 
-  tokenProvider?: TokenProvider; // обязательный для класса, но в компоненте можно не передать, если дефолт
+  tokenProvider?: TokenProvider;
 
   webrtc?: {
     iceServers?: RTCIceServer[];
@@ -180,10 +185,15 @@ export type RealTimeClientProps = {
   logger?: Logger;
   autoConnect?: boolean;
   attachChat?: boolean;
+
+  // Новые пропсы для режимов
+  initialMode?: ChatMode;
+  onModeChange?: (mode: ChatMode) => void;
+
   children?: React.ReactNode | ((ctx: RealtimeContextValue) => React.ReactNode);
 };
 
 export type CoreConfig = Omit<
   RealTimeClientProps,
-  'autoConnect' | 'attachChat' | 'children'
+  'autoConnect' | 'attachChat' | 'children' | 'initialMode' | 'onModeChange'
 >;

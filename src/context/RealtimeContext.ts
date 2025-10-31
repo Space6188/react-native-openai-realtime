@@ -14,6 +14,11 @@ export const RealtimeContext = createContext<RealtimeContextValue>({
   sendRaw: () => {},
   addMessage: () => '',
   clearAdded: () => {},
+
+  mode: 'voice',
+  switchMode: async () => {},
+  sendTextMessage: async () => {},
 });
 
 export const RealtimeProvider = RealtimeContext.Provider;
+export * from './RealtimeContext';

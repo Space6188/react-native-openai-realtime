@@ -1,5 +1,8 @@
 import { AddableMessage, ExtendedChatMsg } from './Chat';
-import type { RealtimeStatus } from '@react-native-openai-realtime/types';
+import type {
+  RealtimeStatus,
+  ChatMode,
+} from '@react-native-openai-realtime/types';
 import type { RealtimeClientClass } from '@react-native-openai-realtime/components/RealtimeClientClass';
 
 export type RealtimeContextValue = {
@@ -19,4 +22,16 @@ export type RealtimeContextValue = {
   sendRaw: (event: any) => void;
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
   clearAdded: () => void;
+
+  // Новые поля для режимов
+  mode: ChatMode;
+  switchMode: (mode: ChatMode) => Promise<void>;
+  sendTextMessage: (
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'default' | 'none';
+    }
+  ) => Promise<void>;
 };

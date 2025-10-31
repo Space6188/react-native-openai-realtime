@@ -7,6 +7,7 @@ import {
   RealTimeClientProps,
   RealtimeContextValue,
   TokenProvider,
+  ChatMode,
 } from '@react-native-openai-realtime/types';
 import {
   useCallback,
@@ -48,11 +49,23 @@ export type RealTimeClientHandle = {
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
+  // Новые
+  getMode: () => 'voice' | 'text';
+  switchMode: (mode: 'voice' | 'text') => Promise<void>;
+  sendTextMessage: (
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'default' | 'none';
+    }
+  ) => Promise<void>;
+
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
   clearAdded: () => void;
   clearChatHistory: () => void;
 
-  // опционально: получить следующий корректный ts
+  // опционально: следующий корректный ts
   getNextTs: () => number;
 };
 
@@ -92,6 +105,10 @@ export const RealTimeClient = forwardRef<
     chatUserPlaceholderOnStart,
     chatAssistantAddOnDelta,
     chatAssistantPlaceholderOnStart,
+
+    // Новые пропсы
+    initialMode = 'voice',
+    onModeChange,
   } = props;
 
   const clientRef = useRef<RealtimeClientClass | null>(null);
@@ -101,10 +118,11 @@ export const RealTimeClient = forwardRef<
   const [status, setStatus] = useState<
     'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
   >('idle');
+  const [mode, setMode] = useState<'voice' | 'text'>(initialMode);
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
-  // Собираем snapshot опций (прежнее поведение)
+  // Snapshot опций
   const optionsSnapshot: CoreConfig = useMemo(() => {
     return prune({
       tokenProvider,
@@ -180,7 +198,7 @@ export const RealTimeClient = forwardRef<
     chatAssistantPlaceholderOnStart,
   ]);
 
-  // Создание клиента лениво
+  // Ленивая инициализация клиента
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
       clientRef.current = new RealtimeClientClass(
@@ -202,7 +220,7 @@ export const RealTimeClient = forwardRef<
     return clientRef.current!;
   }, [optionsSnapshot, tokenProvider]);
 
-  // Обновление tokenProvider на лету
+  // Обновляем tokenProvider на лету
   useEffect(() => {
     if (clientRef.current && tokenProvider) {
       try {
@@ -211,7 +229,7 @@ export const RealTimeClient = forwardRef<
     }
   }, [tokenProvider]);
 
-  // Фон → disconnect
+  // Приложение в фон — отключаемся
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background' || state === 'inactive') {
@@ -222,7 +240,7 @@ export const RealTimeClient = forwardRef<
     return () => sub.remove();
   }, []);
 
-  // Подключение/отключение
+  // Подключение
   const connect = useCallback(async () => {
     const client = ensureClient();
     try {
@@ -241,6 +259,7 @@ export const RealTimeClient = forwardRef<
     }
   }, [ensureClient, attachChat, chatIsMeaningfulText, policyIsMeaningfulText]);
 
+  // Отключение
   const disconnect = useCallback(async () => {
     const client = clientRef.current;
     if (!client) return;
@@ -268,7 +287,26 @@ export const RealTimeClient = forwardRef<
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoConnect]);
 
-  // Считаем nextTs на основе текущей ленты (встроенный чат + ваши добавленные)
+  // Применяем initialMode после подключения
+  useEffect(() => {
+    if (status === 'connected' && clientRef.current) {
+      if (initialMode === 'text') {
+        clientRef.current
+          .switchMode('text')
+          .then(() => {
+            setMode('text');
+            onModeChange?.('text');
+          })
+          .catch(() => {});
+      } else {
+        setMode('voice');
+        onModeChange?.('voice');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  // Подсчёт nextTs для локальных UI сообщений
   const getNextTs = useCallback((): number => {
     try {
       const chatMax =
@@ -284,15 +322,13 @@ export const RealTimeClient = forwardRef<
     }
   }, [chat, addedMessages]);
 
-  // Нормализация пользовательских сообщений — ВАЖНО: синхронизируем time/ts/статус
+  // Нормализация локальных UI сообщений
   const normalize = useCallback(
     (m: AddableMessage): ExtendedChatMsg => {
       const base = {
         id: (m as any).id ?? makeId(),
         role: (m as any).role ?? 'assistant',
-        // Синхрон с ChatStore: ts — монотонный порядок
         ts: (m as any).ts ?? getNextTs(),
-        // time обязателен и в ChatMsg, и в UIChatMsg
         time: Date.now(),
       };
 
@@ -308,7 +344,6 @@ export const RealTimeClient = forwardRef<
         } as unknown as ExtendedChatMsg;
       }
 
-      // Локальный text-баббл: ставим статус 'done', чтобы удовлетворить ChatMsg
       return {
         ...base,
         type: 'text',
@@ -343,7 +378,31 @@ export const RealTimeClient = forwardRef<
     clientRef.current?.clearChatHistory();
   }, []);
 
-  // Контекст — без изменений
+  // Новые фичи: режимы
+  const switchMode = useCallback(
+    async (newMode: ChatMode) => {
+      await clientRef.current?.switchMode(newMode);
+      setMode(newMode);
+      onModeChange?.(newMode);
+    },
+    [onModeChange]
+  );
+
+  const sendTextMessage = useCallback(
+    async (
+      text: string,
+      options?: {
+        responseModality?: 'text' | 'audio';
+        instructions?: string;
+        conversation?: 'default' | 'none';
+      }
+    ) => {
+      await clientRef.current?.sendTextMessage(text, options);
+    },
+    []
+  );
+
+  // Контекст
   const value: RealtimeContextValue = useMemo(
     () => ({
       client: clientRef.current,
@@ -363,6 +422,11 @@ export const RealTimeClient = forwardRef<
       sendRaw: (e: any) => clientRef.current?.sendRaw(e),
       addMessage,
       clearAdded,
+
+      // Новые поля
+      mode,
+      switchMode,
+      sendTextMessage,
     }),
     [
       status,
@@ -372,6 +436,9 @@ export const RealTimeClient = forwardRef<
       addMessage,
       clearAdded,
       clearChatHistory,
+      mode,
+      switchMode,
+      sendTextMessage,
     ]
   );
 
@@ -397,6 +464,10 @@ export const RealTimeClient = forwardRef<
       sendResponseStrict: (opts) => clientRef.current?.sendResponseStrict(opts),
       updateSession: (patch) => clientRef.current?.updateSession(patch),
 
+      getMode: () => clientRef.current?.getMode() ?? mode,
+      switchMode,
+      sendTextMessage,
+
       addMessage,
       clearAdded,
       clearChatHistory,
@@ -410,6 +481,9 @@ export const RealTimeClient = forwardRef<
       clearAdded,
       clearChatHistory,
       getNextTs,
+      mode,
+      switchMode,
+      sendTextMessage,
     ]
   );
 

@@ -2,6 +2,27 @@ import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-real
 
 type Emitter = (type: string, payload?: any) => void;
 
+// Достаём input_text из созданного user item (typed-ввод)
+function extractInputTextFromItem(item: any): string | null {
+  try {
+    const content = item?.content;
+    if (!Array.isArray(content)) return null;
+    for (const c of content) {
+      if (!c || typeof c !== 'object') continue;
+      if (c.type === 'input_text' && typeof c.text === 'string') {
+        return c.text;
+      }
+      // На всякий случай: альтернативный формат
+      if (c.type === 'text' && typeof c.text === 'string') {
+        return c.text;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function createDefaultRouter(
   emit: Emitter,
   options: RealtimeClientOptionsBeforePrune,
@@ -12,16 +33,22 @@ export function createDefaultRouter(
     const hooks = options.hooks;
     hooks?.onEvent?.(msg);
 
-    // User created
+    // Пользовательский item создан
     if (msg.type === 'conversation.item.created' && msg.item?.role === 'user') {
       const itemId = msg.item.id;
       if (itemId) {
         emit('user:item_started', { itemId });
       }
+
+      // Если это typed-ввод (input_text) — сразу завершаем как готовое сообщение
+      const typed = extractInputTextFromItem(msg.item);
+      if (itemId && typed && String(typed).trim()) {
+        emit('user:completed', { itemId, transcript: String(typed) });
+      }
       return;
     }
 
-    // Assistant created
+    // Ассистент начал ответ
     if (msg.type === 'response.created') {
       const responseId = msg.response?.id || msg.response_id;
       if (responseId) {
@@ -30,7 +57,7 @@ export function createDefaultRouter(
       return;
     }
 
-    // User transcription
+    // Транскрипция пользователя (аудио → текст)
     if (msg.type === 'conversation.item.input_audio_transcription.delta') {
       const itemId = msg.item_id;
       const delta = msg.delta || '';
@@ -66,7 +93,7 @@ export function createDefaultRouter(
       return;
     }
 
-    // Assistant deltas/completed/canceled
+    // Дельты ассистента
     if (msg.type === 'response.audio_transcript.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
@@ -84,6 +111,7 @@ export function createDefaultRouter(
       }
       return;
     }
+
     if (msg.type === 'response.output_text.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
@@ -98,6 +126,7 @@ export function createDefaultRouter(
       return;
     }
 
+    // Завершение/отмена ответа ассистента
     if (msg.type === 'response.completed') {
       const responseId = msg.response_id || msg.response?.id;
       const consumed = hooks?.onAssistantCompleted?.({
@@ -146,7 +175,7 @@ export function createDefaultRouter(
       return;
     }
 
-    // Tools
+    // Вызовы инструментов
     if (msg.type === 'response.function_call_arguments.delta') {
       const prev = functionArgsBuffer.get(msg.call_id) || '';
       functionArgsBuffer.set(msg.call_id, prev + (msg.delta || ''));
