@@ -44,7 +44,7 @@ export type RealTimeClientHandle = {
   sendResponseStrict: (opts: {
     instructions: string;
     modalities?: Array<'audio' | 'text'>;
-    conversation?: 'default' | 'none';
+    conversation?: 'auto' | 'none'; // <-- тут
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
@@ -55,7 +55,7 @@ export type RealTimeClientHandle = {
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'default' | 'none';
+      conversation?: 'auto' | 'none'; // <-- тут
     }
   ) => Promise<void>;
 
@@ -379,7 +379,7 @@ export const RealTimeClient = forwardRef<
       options?: {
         responseModality?: 'text' | 'audio';
         instructions?: string;
-        conversation?: 'default' | 'none';
+        conversation?: 'auto' | 'none'; // <-- тут
       }
     ) => {
       await clientRef.current?.sendTextMessage(text, options);
@@ -399,7 +399,7 @@ export const RealTimeClient = forwardRef<
       sendResponseStrict: (opts: {
         instructions: string;
         modalities?: Array<'audio' | 'text'>;
-        conversation?: 'default' | 'none';
+        conversation?: 'auto' | 'none'; // <-- тут
       }) => clientRef.current?.sendResponseStrict(opts),
       updateSession: (patch: Partial<any>) =>
         clientRef.current?.updateSession(patch),
@@ -410,7 +410,7 @@ export const RealTimeClient = forwardRef<
       mode,
       switchMode,
       sendTextMessage,
-      getNextTs, // добавлено
+      getNextTs,
     }),
     [
       status,
@@ -423,7 +423,7 @@ export const RealTimeClient = forwardRef<
       mode,
       switchMode,
       sendTextMessage,
-      getNextTs, // не забыть зависимость
+      getNextTs,
     ]
   );
 

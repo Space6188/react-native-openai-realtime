@@ -16,14 +16,13 @@ export type RealtimeContextValue = {
   sendResponseStrict: (opts: {
     instructions: string;
     modalities?: Array<'audio' | 'text'>;
-    conversation?: 'default' | 'none';
+    conversation?: 'auto' | 'none'; // <-- тут
   }) => void;
   updateSession: (patch: Partial<any>) => void;
   sendRaw: (event: any) => void;
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
   clearAdded: () => void;
 
-  // Новые поля для режимов
   mode: ChatMode;
   switchMode: (mode: ChatMode) => Promise<void>;
   sendTextMessage: (
@@ -31,10 +30,8 @@ export type RealtimeContextValue = {
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'default' | 'none';
+      conversation?: 'auto' | 'none'; // <-- тут
     }
   ) => Promise<void>;
-
-  // Доступ к монотонному порядку ts
   getNextTs: () => number;
 };

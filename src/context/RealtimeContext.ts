@@ -19,7 +19,6 @@ export const RealtimeContext = createContext<RealtimeContextValue>({
   switchMode: async () => {},
   sendTextMessage: async () => {},
 
-  // новый дефолт
   getNextTs: () => Date.now(),
 });
 

@@ -444,7 +444,7 @@ export class RealtimeClientClass {
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'default' | 'none';
+      conversation?: 'auto' | 'none'; // <-- тут
     }
   ): Promise<void> {
     const msg = (text ?? '').trim();
@@ -464,12 +464,15 @@ export class RealtimeClientClass {
       options?.responseModality ??
       (this.currentMode === 'text' ? 'text' : 'audio');
 
-    this.sendResponseStrict({
+    const response: ResponseCreateStrict = {
       instructions:
         options?.instructions ?? 'Ответь на сообщение пользователя.',
       modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
-      conversation: options?.conversation ?? 'default',
-    });
+      // Если явно передали conversation — используем его, иначе 'auto'
+      conversation: options?.conversation ?? 'auto',
+    };
+
+    this.sendResponseStrict(response);
   }
 
   getPeerConnection() {
