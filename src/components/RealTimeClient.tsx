@@ -102,7 +102,6 @@ export const RealTimeClient = forwardRef<
     chatAssistantAddOnDelta,
     chatAssistantPlaceholderOnStart,
 
-    // Новые пропсы
     initialMode = 'voice',
     onModeChange,
     allowConnectWithoutMic = true,
@@ -162,8 +161,6 @@ export const RealTimeClient = forwardRef<
         assistantPlaceholderOnStart: chatAssistantPlaceholderOnStart,
       }),
       logger,
-
-      // НОВОЕ: пробрасываем флаг в ядро
       allowConnectWithoutMic,
     }) as CoreConfig;
   }, [
@@ -413,6 +410,7 @@ export const RealTimeClient = forwardRef<
       mode,
       switchMode,
       sendTextMessage,
+      getNextTs, // добавлено
     }),
     [
       status,
@@ -425,6 +423,7 @@ export const RealTimeClient = forwardRef<
       mode,
       switchMode,
       sendTextMessage,
+      getNextTs, // не забыть зависимость
     ]
   );
 

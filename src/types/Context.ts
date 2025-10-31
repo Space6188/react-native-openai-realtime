@@ -34,4 +34,7 @@ export type RealtimeContextValue = {
       conversation?: 'default' | 'none';
     }
   ) => Promise<void>;
+
+  // Доступ к монотонному порядку ts
+  getNextTs: () => number;
 };

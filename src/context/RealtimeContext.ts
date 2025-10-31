@@ -18,6 +18,9 @@ export const RealtimeContext = createContext<RealtimeContextValue>({
   mode: 'voice',
   switchMode: async () => {},
   sendTextMessage: async () => {},
+
+  // новый дефолт
+  getNextTs: () => Date.now(),
 });
 
 export const RealtimeProvider = RealtimeContext.Provider;

@@ -1,0 +1,3301 @@
+import type {
+  RTCPeerConnection,
+  MediaStreamTrack,
+  MediaStream,
+} from 'react-native-webrtc';
+import type RTCDataChannel from 'react-native-webrtc/lib/typescript/RTCDataChannel';
+export interface SuccessCallbacks {
+  onHangUpStarted?: () => void;
+  onHangUpDone?: () => void;
+
+  onPeerConnectionCreatingStarted?: () => void;
+  onPeerConnectionCreated?: (pc: RTCPeerConnection) => void;
+  onRTCPeerConnectionStateChange?: (
+    state:
+      | 'new'
+      | 'connecting'
+      | 'connected'
+      | 'disconnected'
+      | 'failed'
+      | 'closed'
+  ) => void;
+
+  onGetUserMediaSetted?: (stream: MediaStream) => void;
+  onLocalStreamSetted?: (stream: MediaStream) => void;
+  onLocalStreamAddedTrack?: (track: MediaStreamTrack) => void;
+  onLocalStreamRemovedTrack?: (track: MediaStreamTrack) => void;
+  onRemoteStreamSetted?: (stream: MediaStream) => void;
+
+  onDataChannelOpen?: (channel: RTCDataChannel) => void;
+  onDataChannelMessage?: (message: any) => void;
+  onDataChannelClose?: () => void;
+
+  onIceGatheringComplete?: () => void;
+  onIceGatheringTimeout?: () => void;
+  onIceGatheringStateChange?: (state: string) => void;
+
+  onMicrophonePermissionGranted?: () => void;
+  onMicrophonePermissionDenied?: () => void;
+
+  onIOSTransceiverSetted?: () => void;
+}
+
+export interface BaseProps extends SuccessCallbacks {
+  onError?: (event: ErrorEvent) => void;
+  onSuccess?: (stage: string, data?: any) => void;
+}
+export type SpeechActivityState = {
+  isUserSpeaking: boolean;
+  isAssistantSpeaking: boolean;
+  inputBuffered: boolean;
+  outputBuffered: boolean;
+  lastUserEventAt: number | null;
+  lastAssistantEventAt: number | null;
+};
+
+export type Listener = (s: SpeechActivityState) => void;
+export type MediaTrackConstraints = {
+  width?: ConstrainNumber;
+  height?: ConstrainNumber;
+  frameRate?: ConstrainNumber;
+  facingMode?: ConstrainString;
+  deviceId?: ConstrainString;
+  groupId?: ConstrainString;
+};
+type ConstrainNumber =
+  | number
+  | {
+      exact?: number;
+      ideal?: number;
+      max?: number;
+      min?: number;
+    };
+type ConstrainString =
+  | string
+  | {
+      exact?: string;
+      ideal?: string;
+    };
+
+export interface Constraints {
+  audio?: boolean | MediaTrackConstraints;
+  video?: boolean | MediaTrackConstraints;
+}
+export type ErrorStage =
+  | 'hangup'
+  | 'ice_gathering'
+  | 'peer_connection'
+  | 'microphone_permission'
+  | 'remote_stream'
+  | 'local_stream'
+  | 'data_channel'
+  | 'get_user_media'
+  | 'ios_transceiver'
+  | 'init_peer_connection'
+  | 'create_offer'
+  | 'set_local_description'
+  | 'set_remote_description'
+  | 'fetch_token'
+  | 'openai_api';
+
+export type ErrorSeverity = 'critical' | 'warning' | 'info';
+
+export interface ErrorEvent {
+  stage: ErrorStage;
+  error: Error;
+  severity: ErrorSeverity;
+  recoverable: boolean;
+  timestamp: number;
+  context?: Record<string, any>;
+}
+import { AddableMessage, ExtendedChatMsg } from './Chat';
+import type {
+  RealtimeStatus,
+  ChatMode,
+} from '@react-native-openai-realtime/types';
+import type { RealtimeClientClass } from '@react-native-openai-realtime/components/RealtimeClientClass';
+
+export type RealtimeContextValue = {
+  client: RealtimeClientClass | null;
+  status: RealtimeStatus;
+  clearChatHistory: () => void;
+  chat: ExtendedChatMsg[];
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void> | void;
+  sendResponse: (opts?: any) => void;
+  sendResponseStrict: (opts: {
+    instructions: string;
+    modalities?: Array<'audio' | 'text'>;
+    conversation?: 'default' | 'none';
+  }) => void;
+  updateSession: (patch: Partial<any>) => void;
+  sendRaw: (event: any) => void;
+  addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
+  clearAdded: () => void;
+
+  // Новые поля для режимов
+  mode: ChatMode;
+  switchMode: (mode: ChatMode) => Promise<void>;
+  sendTextMessage: (
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'default' | 'none';
+    }
+  ) => Promise<void>;
+};
+export type ChatAdapterOptions = {
+  isMeaningfulText?: (text: string) => boolean;
+};
+
+export type ChatOptions = {
+  enabled?: boolean; // по умолчанию true — встроенный чат-стор включён
+  isMeaningfulText?: (text: string) => boolean;
+  userAddOnDelta?: boolean;
+  userPlaceholderOnStart?: boolean;
+  assistantAddOnDelta?: boolean;
+  assistantPlaceholderOnStart?: boolean;
+};
+
+export type ChatMsg = {
+  id: string;
+  type: 'text' | 'ui';
+  time: number;
+  role: 'user' | 'assistant';
+  text?: string;
+  ts: number;
+  status: 'streaming' | 'done' | 'canceled';
+  responseId?: string;
+  itemId?: string;
+};
+
+export type UIChatMsg = {
+  id: string;
+  role: 'assistant' | 'user' | 'system' | 'tool';
+  ts: number;
+  type: 'ui';
+  time: number;
+  kind: string; // тип вашего UI-сообщения
+  payload: any; // любые данные для рендера
+};
+
+// Расширенный тип чата: встроенные сообщения + ваши UI-сообщения
+export type ExtendedChatMsg = ChatMsg | UIChatMsg;
+
+// Что можно добавить через addMessage (одно или много)
+export type AddableMessage =
+  | {
+      id?: string;
+      role?: 'assistant' | 'user' | 'system' | 'tool';
+      ts?: number;
+      type?: 'text';
+      text: string;
+    }
+  | {
+      id?: string;
+      role?: 'assistant' | 'user' | 'system' | 'tool';
+      ts?: number;
+      type: 'ui';
+      kind: string;
+      payload: any;
+    };
+export type ResponseCreateParams = {
+  instructions: string;
+  modalities?: Array<'audio' | 'text'>;
+};
+
+export type ResponseCreateOptions = {
+  instructions?: string;
+  modalities?: Array<'audio' | 'text'>;
+  conversation?: 'default' | 'none';
+};
+
+export type ResponseCreateStrict = Omit<
+  ResponseCreateOptions,
+  'instructions'
+> & {
+  instructions: string;
+};
+export * from './Chat';
+export * from './ClientStructure';
+export * from './Constraints';
+export * from './Context';
+export * from './ErrorStage';
+export * from './Responce';
+export * from './Speech';
+export * from './SucessCallbacks';
+import type { RTCOfferOptions } from 'react-native-webrtc/lib/typescript/RTCUtil';
+import { VOICE_IDS, VoiceId } from '@react-native-openai-realtime/helpers';
+import type {
+  RealtimeContextValue,
+  Constraints,
+  ChatOptions,
+} from '@react-native-openai-realtime/types';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
+
+export type RTCIceServer = {
+  credential?: string;
+  url?: string;
+  urls?: string | string[];
+  username?: string;
+};
+
+export type RTCConfiguration = {
+  bundlePolicy?: 'balanced' | 'max-compat' | 'max-bundle';
+  iceCandidatePoolSize?: number;
+  iceServers?: RTCIceServer[];
+  iceTransportPolicy?: 'all' | 'relay';
+  rtcpMuxPolicy?: 'negotiate' | 'require';
+};
+
+export type TokenProvider = () => Promise<string>;
+
+// Новый тип для режима чата
+export type ChatMode = 'voice' | 'text';
+
+export type SessionConfig = {
+  model?: string;
+  voice?: VoiceId;
+  modalities?: Array<'audio' | 'text'>;
+  turn_detection?: {
+    type: 'server_vad';
+    silence_duration_ms?: number;
+    threshold?: number;
+    prefix_padding_ms?: number;
+  } | null;
+  input_audio_transcription?: { model: string; language?: string };
+  tools?: any[];
+  instructions?: string;
+};
+
+export type RealtimeClientHooks = {
+  onOpen?: (dc: any) => void;
+  onEvent?: (evt: any) => void;
+  onError?: (e: any) => void;
+
+  onUserTranscriptionDelta?: (payload: {
+    itemId: string;
+    delta: string;
+  }) => 'consume' | void;
+  onUserTranscriptionCompleted?: (payload: {
+    itemId: string;
+    transcript: string;
+  }) => 'consume' | void;
+
+  onAssistantTextDelta?: (payload: {
+    responseId: string;
+    delta: string;
+    channel: 'audio_transcript' | 'output_text';
+  }) => 'consume' | void;
+
+  onAssistantCompleted?: (payload: {
+    responseId: string;
+    status: 'done' | 'canceled';
+  }) => 'consume' | void;
+
+  onToolCall?: (payload: {
+    name: string;
+    args: any;
+    call_id: string;
+  }) => Promise<any> | any;
+};
+
+export type MiddlewareCtx = {
+  event: any;
+  send: (e: any) => void | Promise<void>;
+  client: RealtimeClientClass;
+};
+
+export type IncomingMiddleware = (
+  ctx: MiddlewareCtx
+) => Promise<any | 'stop' | null | void> | any | 'stop' | null | void;
+
+export type OutgoingMiddleware = (
+  event: any
+) => any | null | 'stop' | Promise<any | null | 'stop'>;
+
+export type Logger = {
+  debug?: (...a: any[]) => void;
+  info?: (...a: any[]) => void;
+  warn?: (...a: any[]) => void;
+  error?: (...a: any[]) => void;
+};
+
+export type RealtimeStatus =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'error'
+  | 'user_speaking'
+  | 'assistant_speaking';
+
+export type RealtimeClientOptionsBeforePrune = {
+  deleteChatHistoryOnDisconnect?: boolean;
+  tokenProvider: TokenProvider;
+  voice?: keyof typeof VOICE_IDS;
+  webrtc?: {
+    iceServers?: RTCIceServer[];
+    dataChannelLabel?: string;
+    offerOptions?: RTCOfferOptions & { voiceActivityDetection?: boolean };
+    configuration?: RTCConfiguration;
+  };
+  media?: { getUserMedia?: Constraints };
+  session?: Partial<SessionConfig>;
+  autoSessionUpdate?: boolean;
+  greet?: {
+    enabled?: boolean;
+    response?: {
+      instructions?: string;
+      modalities?: Array<'audio' | 'text'>;
+    };
+  };
+  hooks?: RealtimeClientHooks;
+  middleware?: {
+    incoming?: IncomingMiddleware[];
+    outgoing?: OutgoingMiddleware[];
+  };
+  policy?: {
+    isMeaningfulText?: (text: string) => boolean;
+  };
+  chat?: ChatOptions;
+  logger?: Logger;
+
+  // НОВОЕ: позволять подключаться без микрофона (fallback recvonly)
+  allowConnectWithoutMic?: boolean; // default: true (если не задано)
+};
+
+// ЕДИНЫЕ ПУБЛИЧНЫЕ ПРОПСЫ
+export type RealTimeClientProps = {
+  // быстрые чат-поведения
+  chatUserAddOnDelta?: boolean;
+  chatInverted?: boolean;
+  deleteChatHistoryOnDisconnect?: boolean;
+  chatUserPlaceholderOnStart?: boolean;
+  chatAssistantAddOnDelta?: boolean;
+  chatAssistantPlaceholderOnStart?: boolean;
+
+  tokenProvider?: TokenProvider;
+
+  webrtc?: {
+    iceServers?: RTCIceServer[];
+    dataChannelLabel?: string;
+    offerOptions?: RTCOfferOptions & { voiceActivityDetection?: boolean };
+    configuration?: RTCConfiguration;
+  };
+
+  media?: { getUserMedia?: Constraints };
+  session?: Partial<SessionConfig>;
+  autoSessionUpdate?: boolean;
+
+  // greet плоско
+  greetEnabled?: boolean;
+  greetInstructions?: string;
+  greetModalities?: Array<'audio' | 'text'>;
+
+  // hooks
+  onOpen?: RealtimeClientHooks['onOpen'];
+  onEvent?: RealtimeClientHooks['onEvent'];
+  onError?: RealtimeClientHooks['onError'];
+  onUserTranscriptionDelta?: RealtimeClientHooks['onUserTranscriptionDelta'];
+  onUserTranscriptionCompleted?: RealtimeClientHooks['onUserTranscriptionCompleted'];
+  onAssistantTextDelta?: RealtimeClientHooks['onAssistantTextDelta'];
+  onAssistantCompleted?: RealtimeClientHooks['onAssistantCompleted'];
+  onToolCall?: RealtimeClientHooks['onToolCall'];
+
+  // middleware
+  incomingMiddleware?: IncomingMiddleware[];
+  outgoingMiddleware?: OutgoingMiddleware[];
+
+  // policy/chat
+  policyIsMeaningfulText?: (text: string) => boolean;
+  chatEnabled?: boolean;
+  chatIsMeaningfulText?: (text: string) => boolean;
+  logger?: Logger;
+  autoConnect?: boolean;
+  attachChat?: boolean;
+
+  // Новые пропсы для режимов
+  initialMode?: ChatMode;
+  onModeChange?: (mode: ChatMode) => void;
+
+  // НОВОЕ: позволять подключаться без микрофона
+  allowConnectWithoutMic?: boolean;
+
+  children?: React.ReactNode | ((ctx: RealtimeContextValue) => React.ReactNode);
+};
+
+export type CoreConfig = Omit<
+  RealTimeClientProps,
+  'autoConnect' | 'attachChat' | 'children' | 'initialMode' | 'onModeChange'
+>;
+import { createContext } from 'react';
+import type { RealtimeContextValue } from '@react-native-openai-realtime/types';
+
+export const RealtimeContext = createContext<RealtimeContextValue>({
+  client: null,
+  status: 'idle',
+  chat: [],
+  connect: async () => {},
+  disconnect: async () => {},
+  sendResponse: () => {},
+  sendResponseStrict: () => {},
+  updateSession: () => {},
+  clearChatHistory: () => {},
+  sendRaw: () => {},
+  addMessage: () => '',
+  clearAdded: () => {},
+
+  mode: 'voice',
+  switchMode: async () => {},
+  sendTextMessage: async () => {},
+});
+
+export const RealtimeProvider = RealtimeContext.Provider;
+export * from './RealtimeContext';
+export * from './RealtimeContext';
+policy — это глобальные правила по умолчанию для всей библиотеки. chat — это настройки только встроенного чат-хранилища/адаптера. Если заданы оба, chat имеет приоритет для чата.
+
+Детально
+
+policy.isMeaningfulText
+
+Глобальный дефолтный предикат “текст осмысленный?”.
+Используется библиотекой как fallback, когда для конкретного модуля (например, чата) не задан свой предикат.
+Может быть полезен и вам самим в middleware/хуках (в примере мы использовали этот предикат, чтобы фильтровать «пустые» assistant-дeльты).
+chat.isMeaningfulText
+
+Предикат только для встроенного чата (ChatStore/ChatAdapter): решает, создавать ли пузырь на финализации и удалять ли пустышки.
+Имеет приоритет над policy.isMeaningfulText.
+Работает, только если chat.enabled !== false (встроенный чат включен).
+Если chat.enabled=false, встроенного чата нет, и chat.isMeaningfulText игнорируется.
+Как выбирается итоговое правило для чата
+Внутри RealtimeClient при создании ChatStore:
+const predicate = options.chat?.isMeaningfulText ?? options.policy?.isMeaningfulText ?? defaultPredicate;
+
+Когда что использовать
+
+Хочу одно правило везде и сразу: задайте только policy.isMeaningfulText. Чат возьмет его как дефолт (если вы не переопределите chat.isMeaningfulText).
+Хочу отдельную логику именно для чата: задайте chat.isMeaningfulText (оно перекроет policy только для чата).
+Хочу отключить встроенный чат, но продолжать фильтровать события в middleware/хуках: chat.enabled = false, используйте policy.isMeaningfulText в своих перехватчиках.
+Использую ChatAdapter вручную: можете передать свой isMeaningfulText прямо в attachChatAdapter(..., { isMeaningfulText }) — он перекроет любые options.
+Мини-примеры
+
+Один предикат для всего (просто в policy)
+policy: {
+isMeaningfulText: t => t.replace(/[^\p{L}\p{N}]+/gu,'').trim().length >= 2,
+},
+// chat не задаем — чат возьмет из policy
+
+Чату — мягче, глобально — строже
+policy: {
+isMeaningfulText: t => t.replace(/\s+/g,'').length >= 3, // глобально строгий
+},
+chat: {
+enabled: true,
+isMeaningfulText: t => !!t.trim(), // для чата помягче
+}
+
+Без встроенного чата, но с глобальным правилом (для своих middleware)
+chat: { enabled: false },
+policy: {
+isMeaningfulText: t => !/^(эм+|мм+|ээ+|угу+|ага+).?$/i.test(t.trim()),
+}
+
+Если нужна наглядность
+
+policy — это «общая политика по умолчанию».
+chat — это «частные настройки именно чата» (перекрывают policy для чата).
+chat.enabled включает/выключает встроенный чат целиком. Policy ничего не включает/выключает, это просто набор правил/эвристик, которые могут использовать разные части системы.
+
+Зачем нужна isMeaningfulText и что она делает
+
+Это предикат “текст осмысленный?”. Он решает, считать ли фрагмент текста полноценным содержимым или “пустышкой”.
+Где используется:
+Встроенный чат (ChatStore/ChatAdapter): при финализации сообщения, если текст неосмысленный (пусто, одни пробелы/пунктуация/междометия) — пузырь не попадает в чат или удаляется.
+В middleware/хуках: можно программно “съедать” ничтожные дельты ассистента/пользователя, чтобы UI не моргал “…” и не копил мусор.
+Разница между policy.isMeaningfulText и chat.isMeaningfulText
+
+policy.isMeaningfulText — глобальный дефолт для всей библиотеки (его удобно использовать и в middleware/хуках). Если нигде не переопределено, чату достанется именно он.
+chat.isMeaningfulText — настройка только встроенного чата (ChatStore/ChatAdapter). Если указали — она перекрывает policy для чата.
+Итого: итоговое правило для чата выбирается так:
+chat.isMeaningfulText ?? policy.isMeaningfulText ?? (t => !!t.trim())
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+
+export const DEFAULTS: RealtimeClientOptionsBeforePrune = {
+  // tokenProvider — обязателен, без него нельзя получить ephemeral token
+  tokenProvider: async () => {
+    throw new Error(
+      'tokenProvider is required: provide a function returning ephemeral token'
+    );
+  },
+
+  webrtc: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ],
+    dataChannelLabel: 'oai-events',
+    offerOptions: {
+      offerToReceiveAudio: true,
+      voiceActivityDetection: true,
+    } as any,
+    configuration: { iceCandidatePoolSize: 10 },
+  },
+
+  media: {
+    getUserMedia: {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      } as any,
+      video: false,
+    },
+  },
+
+  session: {
+    model: 'gpt-4o-realtime-preview-2024-12-17',
+    voice: 'alloy',
+    modalities: ['audio', 'text'],
+    input_audio_transcription: { model: 'whisper-1' },
+    turn_detection: {
+      type: 'server_vad',
+      silence_duration_ms: 700,
+      prefix_padding_ms: 300,
+      threshold: 0.5,
+    },
+  },
+
+  autoSessionUpdate: true,
+
+  greet: {
+    enabled: true,
+    response: {
+      instructions: 'Привет! Я на связи и готов помочь.',
+      modalities: ['audio', 'text'],
+    },
+  },
+
+  hooks: {},
+
+  middleware: {
+    incoming: [],
+    outgoing: [],
+  },
+
+  policy: {
+    isMeaningfulText: (t: string) => !!t.trim(),
+  },
+
+  chat: {
+    enabled: true,
+    isMeaningfulText: (t: string) => !!t.trim(),
+  },
+
+  logger: {
+    info: (...a) => console.log('[INFO]', ...a),
+    debug: (...a) => console.log('[DEBUG]', ...a),
+    warn: (...a) => console.log('[WARN]', ...a),
+    error: (...a) => console.log('[ERROR]', ...a),
+  },
+};
+export * from './defaultOptions';
+import type {
+  ResponseCreateParams,
+  ResponseCreateStrict,
+  RealtimeClientOptionsBeforePrune,
+} from '@react-native-openai-realtime/types';
+import { ErrorHandler } from '@react-native-openai-realtime/handlers';
+import { DataChannelManager } from '@react-native-openai-realtime/managers';
+
+export class MessageSender {
+  private dataChannelManager: DataChannelManager;
+  private options: RealtimeClientOptionsBeforePrune;
+  private errorHandler: ErrorHandler;
+
+  constructor(
+    dataChannelManager: DataChannelManager,
+    options: RealtimeClientOptionsBeforePrune,
+    errorHandler: ErrorHandler
+  ) {
+    this.dataChannelManager = dataChannelManager;
+    this.options = options;
+    this.errorHandler = errorHandler;
+  }
+
+  async sendRaw(event: any): Promise<void> {
+    try {
+      if (!this.dataChannelManager.isOpen()) {
+        throw new Error('DataChannel is not open');
+      }
+
+      // Outgoing middleware
+      if (this.options.middleware?.outgoing) {
+        for (const mw of this.options.middleware.outgoing) {
+          const res = await Promise.resolve(mw(event));
+
+          if (res === 'stop') {
+            return;
+          }
+          if (res && typeof res === 'object') {
+            event = res;
+          }
+        }
+      }
+
+      if (!this.dataChannelManager.isOpen()) {
+        throw new Error('DataChannel is not open');
+      }
+
+      this.dataChannelManager.send(event);
+    } catch (e: any) {
+      this.errorHandler.handle('data_channel', e, 'warning', true, { event });
+    }
+  }
+  sendResponse(): void;
+  sendResponse(params: ResponseCreateParams): void;
+  sendResponse(params?: any): void {
+    const response = params ?? {};
+    this.sendRaw({ type: 'response.create', response });
+  }
+  sendResponseStrict(options: ResponseCreateStrict) {
+    this.sendRaw({ type: 'response.create', response: options });
+  }
+
+  updateSession(patch: Partial<any>) {
+    this.sendRaw({ type: 'session.update', session: patch });
+  }
+
+  sendToolOutput(call_id: string, output: any) {
+    this.sendRaw({
+      type: 'conversation.item.create',
+      item: {
+        type: 'function_call_output',
+        call_id,
+        output: JSON.stringify(output),
+      },
+    });
+  }
+}
+// core/managers/OpenAIApiClient.ts
+import { ErrorHandler } from '@react-native-openai-realtime/handlers';
+
+export class OpenAIApiClient {
+  private errorHandler: ErrorHandler;
+
+  constructor(errorHandler: ErrorHandler) {
+    this.errorHandler = errorHandler;
+  }
+
+  async postSDP(localSdp: string, ephemeralKey: string): Promise<string> {
+    try {
+      const resp = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${ephemeralKey}`,
+          'Content-Type': 'application/sdp',
+          'OpenAI-Beta': 'realtime=v1',
+        },
+        body: localSdp || '',
+      });
+
+      const text = await resp.text();
+
+      if (!resp.ok) {
+        this.errorHandler.handle(
+          'openai_api',
+          new Error(`OpenAI ${resp.status}: ${text.slice(0, 200)}`)
+        );
+        throw new Error(text);
+      }
+
+      if (!text.startsWith('v=')) {
+        this.errorHandler.handle(
+          'openai_api',
+          new Error(`Invalid SDP from OpenAI: ${text.slice(0, 100)}`)
+        );
+        throw new Error('Invalid SDP');
+      }
+
+      return text;
+    } catch (e: any) {
+      this.errorHandler.handle('openai_api', e);
+      throw e;
+    }
+  }
+}
+// core/managers/MediaManager.ts
+import { mediaDevices, MediaStream } from 'react-native-webrtc';
+import type { RTCPeerConnection } from 'react-native-webrtc';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
+
+export class MediaManager {
+  private localStream: MediaStream | null = null;
+  private remoteStream: MediaStream | null = null;
+  private options: RealtimeClientOptionsBeforePrune;
+  private errorHandler: ErrorHandler;
+  private successHandler: SuccessHandler;
+
+  constructor(
+    options: RealtimeClientOptionsBeforePrune,
+    errorHandler: ErrorHandler,
+    successHandler: SuccessHandler
+  ) {
+    this.options = options;
+    this.errorHandler = errorHandler;
+    this.successHandler = successHandler;
+  }
+
+  async getUserMedia(): Promise<MediaStream> {
+    try {
+      const constraints = this.options.media?.getUserMedia!;
+      const stream = await mediaDevices.getUserMedia(constraints);
+      this.localStream = stream;
+      this.successHandler.getUserMediaSetted(stream);
+      this.successHandler.localStreamSetted(stream);
+      return stream;
+    } catch (e: any) {
+      this.errorHandler.handle('get_user_media', e);
+      throw e;
+    }
+  }
+
+  addLocalStreamToPeerConnection(pc: RTCPeerConnection, stream: MediaStream) {
+    stream.getTracks().forEach((track) => {
+      try {
+        pc.addTrack(track, stream);
+        this.successHandler.localStreamAddedTrack(track);
+      } catch (e: any) {
+        this.errorHandler.handle('local_stream', e);
+      }
+    });
+  }
+
+  setupRemoteStream(pc: RTCPeerConnection) {
+    // @ts-ignore
+    pc.ontrack = (event: any) => {
+      try {
+        if (!this.remoteStream) {
+          this.remoteStream = new MediaStream();
+        }
+        this.remoteStream.addTrack(event.track);
+        this.successHandler.remoteStreamSetted(this.remoteStream);
+      } catch (e: any) {
+        this.errorHandler.handle('remote_stream', e);
+      }
+    };
+  }
+
+  getLocalStream() {
+    return this.localStream;
+  }
+
+  getRemoteStream() {
+    return this.remoteStream;
+  }
+
+  stopLocalStream() {
+    if (this.localStream) {
+      try {
+        this.localStream.getTracks().forEach((t) => {
+          try {
+            t.stop();
+          } catch {}
+        });
+      } catch {}
+      this.localStream = null;
+    }
+  }
+
+  cleanup() {
+    this.stopLocalStream();
+    this.remoteStream = null;
+  }
+}
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import { RTCPeerConnection } from 'react-native-webrtc';
+
+export class PeerConnectionManager {
+  private pc: RTCPeerConnection | null = null;
+  private options: RealtimeClientOptionsBeforePrune;
+  private errorHandler: ErrorHandler;
+  private successHandler: SuccessHandler;
+
+  constructor(
+    options: RealtimeClientOptionsBeforePrune,
+    errorHandler: ErrorHandler,
+    successHandler: SuccessHandler
+  ) {
+    this.options = options;
+    this.errorHandler = errorHandler;
+    this.successHandler = successHandler;
+  }
+
+  create(): RTCPeerConnection {
+    try {
+      this.successHandler.peerConnectionCreatingStarted();
+
+      const pc = new RTCPeerConnection(
+        this.options.webrtc?.configuration ??
+          ({
+            iceServers: this.options.webrtc?.iceServers,
+            iceCandidatePoolSize:
+              this.options.webrtc?.configuration?.iceCandidatePoolSize ?? 10,
+          } as RTCConfiguration)
+      );
+
+      this.pc = pc;
+      this.successHandler.peerConnectionCreated(pc);
+
+      // Setup listeners
+      this.setupListeners(pc);
+
+      return pc;
+    } catch (e: any) {
+      this.errorHandler.handle('peer_connection', e);
+      throw e;
+    }
+  }
+
+  private setupListeners(pc: RTCPeerConnection) {
+    // @ts-ignore
+    pc.onconnectionstatechange = () =>
+      this.successHandler.rtcPeerConnectionStateChange(pc.connectionState);
+
+    // @ts-ignore
+    pc.onicecandidate = (e: any) => {
+      if (!e.candidate) {
+        this.successHandler.iceGatheringComplete();
+      }
+    };
+
+    // @ts-ignore
+    pc.oniceconnectionstatechange = () =>
+      this.successHandler.iceGatheringStateChange(pc.iceConnectionState);
+  }
+
+  async createOffer() {
+    if (!this.pc) {
+      throw new Error('PeerConnection not created');
+    }
+
+    try {
+      const offerOptions = this.options.webrtc?.offerOptions as any;
+      const offer = await this.pc.createOffer(offerOptions);
+      return offer;
+    } catch (e: any) {
+      this.errorHandler.handle('create_offer', e);
+      throw e;
+    }
+  }
+
+  async setLocalDescription(offer: any) {
+    if (!this.pc) {
+      throw new Error('PeerConnection not created');
+    }
+
+    try {
+      await this.pc.setLocalDescription(offer);
+    } catch (e: any) {
+      this.errorHandler.handle('set_local_description', e);
+      throw e;
+    }
+  }
+
+  async setRemoteDescription(answer: string) {
+    if (!this.pc) {
+      throw new Error('PeerConnection not created');
+    }
+
+    try {
+      await this.pc.setRemoteDescription({ type: 'answer', sdp: answer });
+    } catch (e: any) {
+      this.errorHandler.handle('set_remote_description', e);
+      throw e;
+    }
+  }
+
+  async waitForIceGathering(): Promise<void> {
+    if (!this.pc) {
+      throw new Error('PeerConnection not created');
+    }
+
+    return new Promise((resolve) => {
+      try {
+        if (this.pc!.iceGatheringState === 'complete') {
+          this.successHandler.iceGatheringComplete();
+          resolve();
+          return;
+        }
+
+        const timeout = setTimeout(() => {
+          this.successHandler.iceGatheringTimeout();
+          // @ts-ignore
+          this.pc!.onicegatheringstatechange = null;
+          resolve();
+        }, 2500);
+
+        // @ts-ignore
+        this.pc!.onicegatheringstatechange = () => {
+          this.successHandler.iceGatheringStateChange(
+            this.pc!.iceGatheringState
+          );
+          if (this.pc!.iceGatheringState === 'complete') {
+            clearTimeout(timeout);
+            // @ts-ignore
+            this.pc!.onicegatheringstatechange = null;
+            this.successHandler.iceGatheringComplete();
+            resolve();
+          }
+        };
+      } catch (e: any) {
+        this.errorHandler.handle('ice_gathering', e, 'warning', true);
+        resolve();
+      }
+    });
+  }
+
+  getPeerConnection() {
+    return this.pc;
+  }
+
+  close() {
+    if (this.pc) {
+      try {
+        this.pc.close();
+      } catch {}
+      this.pc = null;
+    }
+  }
+
+  isConnected() {
+    return !!this.pc && this.pc.connectionState === 'connected';
+  }
+}
+export * from './DataChannelManager';
+export * from './EventRouter';
+export * from './MediaManager';
+export * from './MessageSender';
+export * from './OpenAIApiManager';
+export * from './PeerConnectionManager';
+import type { RTCPeerConnection } from 'react-native-webrtc';
+import type RTCDataChannel from 'react-native-webrtc/lib/typescript/RTCDataChannel';
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
+
+type MessageHandler = (message: any) => void | Promise<void>;
+
+export class DataChannelManager {
+  private dc: RTCDataChannel | null = null;
+  private options: RealtimeClientOptionsBeforePrune;
+  private errorHandler: ErrorHandler;
+  private successHandler: SuccessHandler;
+  private onMessage?: MessageHandler;
+
+  constructor(
+    options: RealtimeClientOptionsBeforePrune,
+    errorHandler: ErrorHandler,
+    successHandler: SuccessHandler
+  ) {
+    this.options = options;
+    this.errorHandler = errorHandler;
+    this.successHandler = successHandler;
+  }
+
+  create(pc: RTCPeerConnection, onMessage: MessageHandler): RTCDataChannel {
+    try {
+      this.onMessage = onMessage;
+
+      // @ts-ignore
+      const dc = pc.createDataChannel(this.options.webrtc?.dataChannelLabel!, {
+        ordered: true,
+        maxRetransmits: 3,
+      });
+
+      this.dc = dc;
+      this.setupListeners(dc);
+
+      return dc;
+    } catch (e: any) {
+      this.errorHandler.handle('data_channel', e);
+      throw e;
+    }
+  }
+
+  private setupListeners(dc: RTCDataChannel) {
+    // @ts-ignore
+    dc.onopen = () => {
+      try {
+        this.successHandler.dataChannelOpen(dc);
+        this.handleOpen();
+      } catch (e: any) {
+        this.errorHandler.handle('data_channel', e);
+      }
+    };
+
+    // @ts-ignore
+    dc.onmessage = async (message: any) => {
+      try {
+        const text =
+          typeof message.data === 'string'
+            ? message.data
+            : String(message.data);
+        let evt: any;
+
+        try {
+          evt = JSON.parse(text);
+        } catch (err: any) {
+          // пробрасываем исходную ошибку парсинга + полезный контекст
+          this.errorHandler.handle(
+            'data_channel',
+            err instanceof Error ? err : new Error(String(err)),
+            'warning',
+            true,
+            {
+              raw:
+                typeof text === 'string' && text.length > 2000
+                  ? text.slice(0, 2000) + '…'
+                  : text,
+              hint: 'Failed to JSON.parse DataChannel message',
+            }
+          );
+          return;
+        }
+
+        this.successHandler.dataChannelMessage(evt);
+
+        if (this.onMessage) {
+          await this.onMessage(evt);
+        }
+      } catch (err: any) {
+        this.errorHandler.handle('data_channel', err);
+      }
+    };
+
+    // @ts-ignore
+    dc.onclose = () => this.successHandler.dataChannelClose();
+
+    // @ts-ignore
+    dc.onerror = (error: any) =>
+      this.errorHandler.handle('data_channel', error, 'warning', true);
+  }
+
+  private handleOpen() {
+    // session.update (auto)
+    if (this.options.autoSessionUpdate && this.options.session) {
+      this.send({
+        type: 'session.update',
+        session: this.options.session,
+      });
+    }
+
+    // greet
+    if (this.options.greet?.enabled !== false) {
+      const response = {
+        instructions:
+          this.options.greet?.response?.instructions ?? 'Привет! Я на связи.',
+        modalities: this.options.greet?.response?.modalities ?? [
+          'audio',
+          'text',
+        ],
+      };
+      this.send({ type: 'response.create', response });
+    }
+
+    this.options.hooks?.onOpen?.(this.dc);
+  }
+
+  send(event: any): void {
+    if (!this.dc || this.dc.readyState !== 'open') {
+      throw new Error('DataChannel is not open');
+    }
+
+    this.dc.send(JSON.stringify(event));
+  }
+
+  getDataChannel() {
+    return this.dc;
+  }
+
+  close() {
+    if (this.dc) {
+      try {
+        this.dc.close();
+        this.successHandler.dataChannelClose();
+      } catch {}
+      this.dc = null;
+    }
+  }
+
+  isOpen() {
+    return !!this.dc && this.dc.readyState === 'open';
+  }
+}
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import { createDefaultRouter } from '@react-native-openai-realtime/helpers';
+import type { RealtimeClientClass } from '@react-native-openai-realtime/components';
+
+type Listener = (payload: any) => void;
+
+export class EventRouter {
+  private listeners = new Map<string, Set<Listener>>();
+  private incomingRouter: (msg: any) => void | Promise<void>;
+  private functionArgsBuffer = new Map<string, string>();
+  private options: RealtimeClientOptionsBeforePrune;
+
+  private sendRef: (e: any) => Promise<void>;
+  private clientRef: any;
+
+  constructor(
+    options: RealtimeClientOptionsBeforePrune,
+    sendRaw: (e: any) => Promise<void>,
+    client?: any
+  ) {
+    this.options = options;
+    this.sendRef = sendRaw;
+    this.clientRef = client;
+
+    this.incomingRouter = createDefaultRouter(
+      this.emit.bind(this),
+      options,
+      this.functionArgsBuffer,
+      sendRaw
+    );
+  }
+
+  setContext(
+    client: RealtimeClientClass | null,
+    sendRaw: (e: any) => Promise<void>
+  ) {
+    this.clientRef = client;
+    this.sendRef = sendRaw;
+  }
+
+  on(type: string, handler: Listener) {
+    const set = this.listeners.get(type) ?? new Set<Listener>();
+    set.add(handler);
+    this.listeners.set(type, set);
+    return () => set.delete(handler);
+  }
+
+  private emit(type: string, payload?: any) {
+    const set = this.listeners.get(type);
+    if (set) set.forEach((fn) => fn(payload));
+  }
+
+  async processIncomingMessage(evt: any) {
+    // incoming middleware — теперь с реальным send и client
+    if (this.options.middleware?.incoming) {
+      for (const mw of this.options.middleware.incoming) {
+        const res = await mw({
+          event: evt,
+          send: this.sendRef,
+          client: this.clientRef,
+        });
+        if (res === 'stop') return;
+        if (res && typeof res === 'object') {
+          evt = res;
+        }
+      }
+    }
+
+    await this.incomingRouter(evt);
+    // ВАЖНО: НЕ вызываем здесь hooks.onEvent — он уже вызывается внутри createDefaultRouter
+  }
+
+  cleanup() {
+    this.listeners.clear();
+    this.functionArgsBuffer.clear();
+  }
+}
+import type {
+  MiddlewareCtx,
+  SpeechActivityState,
+  Listener,
+} from '@react-native-openai-realtime/types';
+
+class SpeechActivityStore {
+  private state: SpeechActivityState = {
+    isUserSpeaking: false,
+    isAssistantSpeaking: false,
+    inputBuffered: false,
+    outputBuffered: false,
+    lastUserEventAt: null,
+    lastAssistantEventAt: null,
+  };
+  private listeners = new Set<Listener>();
+
+  get() {
+    return this.state;
+  }
+  subscribe(fn: Listener) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+  private emit() {
+    const s = this.state;
+    this.listeners.forEach((fn) => fn(s));
+  }
+
+  setUserSpeaking(v: boolean) {
+    if (this.state.isUserSpeaking !== v) {
+      this.state = {
+        ...this.state,
+        isUserSpeaking: v,
+        lastUserEventAt: Date.now(),
+      };
+      this.emit();
+    }
+  }
+  setAssistantSpeaking(v: boolean) {
+    if (this.state.isAssistantSpeaking !== v) {
+      this.state = {
+        ...this.state,
+        isAssistantSpeaking: v,
+        lastAssistantEventAt: Date.now(),
+      };
+      this.emit();
+    }
+  }
+  setInputBuffered(v: boolean) {
+    if (this.state.inputBuffered !== v) {
+      this.state = {
+        ...this.state,
+        inputBuffered: v,
+        lastUserEventAt: Date.now(),
+      };
+      this.emit();
+    }
+  }
+  setOutputBuffered(v: boolean) {
+    if (this.state.outputBuffered !== v) {
+      this.state = {
+        ...this.state,
+        outputBuffered: v,
+        lastAssistantEventAt: Date.now(),
+      };
+      this.emit();
+    }
+  }
+}
+
+export const speechActivityStore = new SpeechActivityStore();
+export type SpeechActivityStoreType = typeof speechActivityStore;
+// Утилита: безопасное сравнение типа события
+const isType = (evt: any, type: string) => evt?.type === type;
+
+// Middleware: обновляет store по событиям
+export function createSpeechActivityMiddleware(store = speechActivityStore) {
+  return ({ event }: MiddlewareCtx) => {
+    const t = event?.type;
+
+    if (
+      isType(event, 'input_audio_buffer.speech_started') ||
+      t === 'speech_started'
+    ) {
+      store.setUserSpeaking(true);
+      store.setAssistantSpeaking(false);
+    }
+    if (
+      isType(event, 'input_audio_buffer.speech_stopped') ||
+      t === 'speech_stopped'
+    ) {
+      store.setUserSpeaking(false);
+      store.setInputBuffered(false);
+    }
+    if (
+      isType(event, 'input_audio_buffer.timeout_triggered') ||
+      t === 'timeout_triggered'
+    ) {
+      store.setUserSpeaking(false);
+      store.setInputBuffered(false);
+    }
+    if (
+      isType(event, 'input_audio_buffer.committed') ||
+      isType(event, 'input_audio_buffer.commit')
+    ) {
+      // Коммит входного буфера: идёт речь/данные — активируем
+      store.setInputBuffered(true);
+      store.setUserSpeaking(true);
+    }
+    if (
+      isType(event, 'input_audio_buffer.cleared') ||
+      isType(event, 'input_audio_buffer.clear')
+    ) {
+      store.setInputBuffered(false);
+      // Отключать speaking по cleared можно не всегда; оставим управление через speech_stopped/timeout
+    }
+
+    // Ассистент (выход)
+    if (isType(event, 'output_audio_buffer.started')) {
+      store.setOutputBuffered(true);
+      store.setAssistantSpeaking(true);
+      store.setInputBuffered(false);
+      store.setUserSpeaking(false);
+    }
+    if (isType(event, 'output_audio_buffer.stopped')) {
+      store.setAssistantSpeaking(false);
+    }
+    if (isType(event, 'output_audio_buffer.cleared')) {
+      store.setOutputBuffered(false);
+      // Говорить ассистент перестаёт обычно по .stopped; cleared — финальный сброс буфера
+    }
+
+    // ничего не блокируем
+    return;
+  };
+}
+
+// React-хук: подписка на store
+export * from './speechMiddleware';
+// src/adapters/ChatAdapter.ts
+import {
+  ChatAdapterOptions,
+  ChatMsg,
+} from '@react-native-openai-realtime/types';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
+/**
+ * Без дублирования: только подписка на встроенный ChatStore клиента.
+ * Если chatStore отключён — возвращаем noop и ничего не делаем.
+ */
+export function attachChatAdapter(
+  client: RealtimeClientClass, // RealtimeClientClass
+  setChat: React.Dispatch<React.SetStateAction<ChatMsg[]>>,
+  _opts?: ChatAdapterOptions
+) {
+  try {
+    const initial =
+      typeof client?.getChat === 'function' ? client.getChat() : [];
+    if (Array.isArray(initial)) {
+      setChat(initial);
+    }
+  } catch {
+    // no-op
+  }
+
+  if (typeof client?.onChatUpdate === 'function') {
+    const unsub = client.onChatUpdate((chat: ChatMsg[]) => setChat(chat));
+    return () => {
+      try {
+        unsub?.();
+      } catch {}
+    };
+  }
+
+  // Fallback: если встроенного ChatStore нет — ничего не делаем
+  return () => {};
+}
+export * from './ChatAdapter';
+export * from './ChatStore';
+// src/adapters/ChatStore.ts
+import type { ChatMsg } from '@react-native-openai-realtime/types';
+
+type Side = 'user' | 'assistant';
+type Listener = (chat: ChatMsg[]) => void;
+
+type StoreRow = {
+  inChat: boolean; // уже есть сообщение в чате
+  hasText: boolean; // был ли хоть какой-то текст
+  buffer: string; // накопитель для дельт, если мы не показываем их сразу
+};
+
+type ChatStoreOptions = {
+  isMeaningfulText?: (t: string) => boolean;
+
+  // Управление поведением добавления в чат во время транскрипции
+  userAddOnDelta?: boolean; // true — добавлять юзер-сообщение при первой дельте
+  userPlaceholderOnStart?: boolean; // true — создать пустое сообщение на user:item_started
+  assistantAddOnDelta?: boolean; // true — добавлять ассистентское сообщение при первой дельте
+  assistantPlaceholderOnStart?: boolean; // true — создать пустое на assistant:response_started
+};
+
+export class ChatStore {
+  private chat: ChatMsg[] = [];
+  private listeners = new Set<Listener>();
+
+  private seqRef = 0;
+  private userOrderRef = new Map<string, number>();
+  private respOrderRef = new Map<string, number>();
+
+  private userState = new Map<string, StoreRow>();
+  private assistantState = new Map<string, StoreRow>();
+
+  private isMeaningful: (text: string) => boolean;
+
+  private cfg: Required<Omit<ChatStoreOptions, 'isMeaningfulText'>> = {
+    userAddOnDelta: true,
+    userPlaceholderOnStart: false,
+    assistantAddOnDelta: true,
+    assistantPlaceholderOnStart: false,
+  };
+
+  constructor(opts?: ChatStoreOptions) {
+    this.isMeaningful = opts?.isMeaningfulText ?? ((t: string) => !!t.trim());
+    if (opts) {
+      this.cfg = {
+        ...this.cfg,
+        userAddOnDelta: opts.userAddOnDelta ?? this.cfg.userAddOnDelta,
+        userPlaceholderOnStart:
+          opts.userPlaceholderOnStart ?? this.cfg.userPlaceholderOnStart,
+        assistantAddOnDelta:
+          opts.assistantAddOnDelta ?? this.cfg.assistantAddOnDelta,
+        assistantPlaceholderOnStart:
+          opts.assistantPlaceholderOnStart ??
+          this.cfg.assistantPlaceholderOnStart,
+      };
+    }
+  }
+
+  get() {
+    return this.chat;
+  }
+
+  subscribe(fn: Listener) {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private emit() {
+    const snap = this.chat.slice();
+    this.listeners.forEach((fn) => fn(snap));
+  }
+
+  private orderBy(side: Side) {
+    return side === 'user' ? this.userOrderRef : this.respOrderRef;
+  }
+
+  private stateBy(side: Side) {
+    return side === 'user' ? this.userState : this.assistantState;
+  }
+
+  private ensureOrder(side: Side, id: string) {
+    const map = this.orderBy(side);
+    if (!map.has(id)) {
+      map.set(id, ++this.seqRef);
+    }
+    return map.get(id)!;
+  }
+
+  startUser(itemId: string) {
+    // Регистрируем порядок
+    this.userOrderRef.set(itemId, ++this.seqRef);
+
+    const placeholder = this.cfg.userPlaceholderOnStart;
+    this.userState.set(itemId, {
+      inChat: placeholder,
+      hasText: false,
+      buffer: '',
+    });
+
+    if (placeholder) {
+      const ts0 = this.userOrderRef.get(itemId)!;
+      const now = Date.now();
+      const msg: ChatMsg & { time: number } = {
+        id: itemId,
+        itemId,
+        type: 'text',
+        role: 'user',
+        text: '',
+        ts: ts0,
+        time: now,
+        status: 'streaming',
+      };
+      this.chat = [...this.chat, msg];
+      this.emit();
+    }
+  }
+
+  startAssistant(responseId: string) {
+    this.respOrderRef.set(responseId, ++this.seqRef);
+
+    const placeholder = this.cfg.assistantPlaceholderOnStart;
+    this.assistantState.set(responseId, {
+      inChat: placeholder,
+      hasText: false,
+      buffer: '',
+    });
+
+    if (placeholder) {
+      const ts0 = this.respOrderRef.get(responseId)!;
+      const now = Date.now();
+      const msg: ChatMsg & { time: number } = {
+        id: responseId,
+        responseId,
+        role: 'assistant',
+        text: '',
+        ts: ts0,
+        type: 'text',
+        time: now,
+        status: 'streaming',
+      };
+      this.chat = [...this.chat, msg];
+      this.emit();
+    }
+  }
+
+  putDelta(side: Side, id: string, delta: string) {
+    if (!id || !delta) return;
+
+    const store = this.stateBy(side);
+    const st = store.get(id) || { inChat: false, hasText: false, buffer: '' };
+    // Убедимся, что есть порядковый ts
+    const ts0 = this.orderBy(side).get(id) ?? this.ensureOrder(side, id);
+
+    const addOnDelta =
+      side === 'user' ? this.cfg.userAddOnDelta : this.cfg.assistantAddOnDelta;
+
+    if (!st.inChat) {
+      if (addOnDelta) {
+        // Добавляем новое сообщение в чат при первой дельте
+        const now = Date.now();
+        const msg: ChatMsg & { time: number } = {
+          id,
+          type: 'text',
+          itemId: side === 'user' ? id : undefined,
+          responseId: side === 'assistant' ? id : undefined,
+          role: side,
+          text: (st.buffer || '') + delta,
+          ts: ts0,
+          time: now,
+          status: 'streaming',
+        };
+        this.chat = [...this.chat, msg];
+        st.inChat = true;
+        st.hasText = true;
+        st.buffer = ''; // сбрасываем буфер, так как теперь рендерим прямо в чате
+      } else {
+        // Не добавляем в чат — просто накапливаем буфер
+        st.buffer += delta;
+        st.hasText = true;
+        // emit не делаем — в чате пока ничего не меняется
+      }
+    } else {
+      // Сообщение уже в чате (плейсхолдер или ранее добавленное по дельте) — дописываем текст
+      this.chat = this.chat.map((m) => {
+        const match = side === 'user' ? m.itemId === id : m.responseId === id;
+        return match ? { ...m, text: (m.text || '') + delta } : m;
+      });
+      st.hasText = true;
+    }
+
+    store.set(id, st);
+    if (st.inChat) this.emit();
+  }
+
+  finalize(
+    side: Side,
+    id: string,
+    status: 'done' | 'canceled',
+    finalText?: string
+  ) {
+    const store = this.stateBy(side);
+    const st = store.get(id); // сохраним ссылку, чтобы вытащить buffer
+    store.delete(id);
+
+    const idx = this.chat.findIndex((m) =>
+      side === 'user' ? m.itemId === id : m.responseId === id
+    );
+
+    // Текст, который будем фиксировать:
+    const buffered = st?.buffer ?? '';
+    const textToUse = finalText ?? buffered;
+
+    if (idx === -1) {
+      if (this.isMeaningful(textToUse)) {
+        const ts0 = this.orderBy(side).get(id) ?? Date.now();
+        const now = Date.now();
+        const msg: ChatMsg & { time: number } = {
+          id,
+          type: 'text',
+          itemId: side === 'user' ? id : undefined,
+          responseId: side === 'user' ? undefined : id,
+          role: side,
+          text: textToUse,
+          ts: ts0,
+          time: now,
+          status: 'done',
+        };
+        this.chat = [...this.chat, msg];
+        this.emit();
+      }
+      return;
+    }
+
+    // Сообщение уже в ленте — обновим финальный текст/статус
+    const msg = this.chat[idx];
+    // Если финального текста нет, а в чате был плейсхолдер — подставим буфер
+    const mergedText = finalText ?? (msg?.text || '' || buffered);
+
+    if (!this.isMeaningful(mergedText)) {
+      const copy = [...this.chat];
+      copy.splice(idx, 1);
+      this.chat = copy;
+      this.emit();
+      return;
+    }
+
+    const copy = [...this.chat];
+    copy[idx] = { ...msg!, text: mergedText, status };
+    this.chat = copy;
+    this.emit();
+  }
+
+  destroy() {
+    this.listeners.clear();
+    this.chat = [];
+    this.userOrderRef.clear();
+    this.respOrderRef.clear();
+    this.userState.clear();
+    this.assistantState.clear();
+    this.seqRef = 0;
+  }
+}
+import { ChatStore } from '@react-native-openai-realtime/adapters';
+import {
+  ErrorHandler,
+  SuccessHandler,
+} from '@react-native-openai-realtime/handlers';
+import { applyDefaults } from '@react-native-openai-realtime/helpers';
+import {
+  PeerConnectionManager,
+  MediaManager,
+  DataChannelManager,
+  MessageSender,
+  EventRouter,
+  OpenAIApiClient,
+} from '@react-native-openai-realtime/managers';
+import type {
+  RealtimeClientOptionsBeforePrune,
+  ResponseCreateParams,
+  ResponseCreateStrict,
+  TokenProvider,
+  ChatMode,
+} from '@react-native-openai-realtime/types';
+
+type Listener = (payload: any) => void;
+type ConnectionState =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'disconnected'
+  | 'error';
+type ConnectionListener = (state: ConnectionState) => void;
+
+export class RealtimeClientClass {
+  private options: RealtimeClientOptionsBeforePrune;
+
+  private connectionState: ConnectionState = 'idle';
+  private connectionListeners = new Set<ConnectionListener>();
+
+  private connecting = false;
+  private disconnecting = false;
+
+  private peerConnectionManager: PeerConnectionManager;
+  private mediaManager: MediaManager;
+  private dataChannelManager: DataChannelManager;
+  private messageSender: MessageSender;
+  private eventRouter: EventRouter;
+  private apiClient: OpenAIApiClient;
+
+  private errorHandler: ErrorHandler;
+  private successHandler: SuccessHandler;
+
+  private chatStore?: ChatStore;
+  private chatWired = false;
+
+  private currentMode: ChatMode = 'voice';
+
+  constructor(
+    userOptions: RealtimeClientOptionsBeforePrune,
+    success?: SuccessHandler,
+    error?: ErrorHandler
+  ) {
+    this.options = applyDefaults(userOptions);
+
+    this.errorHandler =
+      error ??
+      new ErrorHandler(
+        (event) => {
+          if (event.severity === 'critical') {
+            this.setConnectionState('error');
+          }
+          this.options.hooks?.onError?.(event);
+        },
+        { error: this.options.logger?.error }
+      );
+
+    const callbacks = {
+      onPeerConnectionCreatingStarted: () => {
+        this.setConnectionState('connecting');
+      },
+      onRTCPeerConnectionStateChange: (
+        state:
+          | 'new'
+          | 'connecting'
+          | 'connected'
+          | 'disconnected'
+          | 'failed'
+          | 'closed'
+      ) => {
+        if (state === 'connected') this.setConnectionState('connected');
+        else if (state === 'connecting' || state === 'new')
+          this.setConnectionState('connecting');
+        else if (state === 'failed') this.setConnectionState('error');
+        else if (state === 'disconnected' || state === 'closed')
+          this.setConnectionState('disconnected');
+      },
+      onDataChannelOpen: () => {
+        this.setConnectionState('connected');
+      },
+      onDataChannelClose: () => {
+        this.setConnectionState('disconnected');
+      },
+    };
+
+    this.successHandler =
+      success ?? new SuccessHandler(callbacks as any, undefined);
+
+    this.peerConnectionManager = new PeerConnectionManager(
+      this.options,
+      this.errorHandler,
+      this.successHandler
+    );
+    this.mediaManager = new MediaManager(
+      this.options,
+      this.errorHandler,
+      this.successHandler
+    );
+    this.dataChannelManager = new DataChannelManager(
+      this.options,
+      this.errorHandler,
+      this.successHandler
+    );
+    this.messageSender = new MessageSender(
+      this.dataChannelManager,
+      this.options,
+      this.errorHandler
+    );
+    this.eventRouter = new EventRouter(
+      this.options,
+      this.sendRaw.bind(this),
+      this
+    );
+    this.apiClient = new OpenAIApiClient(this.errorHandler);
+
+    if (this.options.chat?.enabled !== false) {
+      this.chatStore = new ChatStore({
+        isMeaningfulText:
+          this.options.chat?.isMeaningfulText ??
+          this.options.policy?.isMeaningfulText,
+        userAddOnDelta: this.options.chat?.userAddOnDelta,
+        userPlaceholderOnStart: this.options.chat?.userPlaceholderOnStart,
+        assistantAddOnDelta: this.options.chat?.assistantAddOnDelta,
+        assistantPlaceholderOnStart:
+          this.options.chat?.assistantPlaceholderOnStart,
+      });
+      this.wireChatStore();
+    }
+  }
+
+  public getMode(): ChatMode {
+    return this.currentMode;
+  }
+
+  public async switchMode(mode: ChatMode): Promise<void> {
+    try {
+      if (!this.isConnected()) {
+        throw new Error('switchMode: not connected');
+      }
+      if (this.currentMode === mode) {
+        this.options.logger?.debug?.(
+          `[RealtimeClient] Already in ${mode} mode`
+        );
+        return;
+      }
+
+      const local = this.mediaManager.getLocalStream?.();
+      if (local && typeof local.getAudioTracks === 'function') {
+        local.getAudioTracks().forEach((t: any) => {
+          t.enabled = mode === 'voice';
+        });
+      }
+
+      const patch: any = {};
+      if (mode === 'voice') {
+        const td = this.options.session?.turn_detection ?? {
+          type: 'server_vad',
+          threshold: 0.5,
+          silence_duration_ms: 700,
+          prefix_padding_ms: 300,
+        };
+        patch.turn_detection = td;
+      } else {
+        patch.turn_detection = undefined;
+      }
+
+      await this.sendRaw({ type: 'session.update', session: patch });
+
+      this.currentMode = mode;
+      this.options.logger?.info?.(`[RealtimeClient] Mode -> ${mode}`);
+    } catch (e: any) {
+      this.errorHandler.handle('init_peer_connection', e, 'warning', true, {
+        mode,
+      });
+      throw e;
+    }
+  }
+
+  setTokenProvider(tp: TokenProvider) {
+    if (typeof tp !== 'function')
+      throw new Error('setTokenProvider: invalid tokenProvider');
+    this.options.tokenProvider = tp;
+  }
+
+  private setConnectionState(state: ConnectionState) {
+    if (this.connectionState !== state) {
+      this.connectionState = state;
+      this.connectionListeners.forEach((listener) => listener(state));
+    }
+  }
+
+  public getConnectionState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  public getStatus() {
+    return this.connectionState;
+  }
+
+  public onConnectionStateChange(listener: ConnectionListener) {
+    this.connectionListeners.add(listener);
+    return () => this.connectionListeners.delete(listener);
+  }
+
+  private wireChatStore(force = false) {
+    if (!this.chatStore) return;
+    if (this.chatWired && !force) return;
+
+    this.on('user:item_started', ({ itemId }) =>
+      this.chatStore!.startUser(itemId)
+    );
+    this.on('assistant:response_started', ({ responseId }) =>
+      this.chatStore!.startAssistant(responseId)
+    );
+    this.on('user:delta', ({ itemId, delta }) =>
+      this.chatStore!.putDelta('user', itemId, delta)
+    );
+    this.on('user:completed', ({ itemId, transcript }) =>
+      this.chatStore!.finalize('user', itemId, 'done', transcript)
+    );
+    this.on('user:failed', ({ itemId }) =>
+      this.chatStore!.finalize('user', itemId, 'done')
+    );
+    this.on('user:truncated', ({ itemId }) =>
+      this.chatStore!.finalize('user', itemId, 'done')
+    );
+    this.on('assistant:delta', ({ responseId, delta }) =>
+      this.chatStore!.putDelta('assistant', responseId, delta)
+    );
+    this.on('assistant:completed', ({ responseId, status }) =>
+      this.chatStore!.finalize('assistant', responseId, status)
+    );
+
+    this.chatWired = true;
+  }
+
+  on(type: string, handler: Listener) {
+    return this.eventRouter.on(type, handler);
+  }
+
+  private preConnectCleanup() {
+    try {
+      this.dataChannelManager.close();
+    } catch {}
+    try {
+      this.peerConnectionManager.close();
+    } catch {}
+    try {
+      this.mediaManager.cleanup();
+    } catch {}
+  }
+
+  async connect() {
+    if (this.connecting) {
+      this.errorHandler.handle(
+        'init_peer_connection',
+        new Error('connect() called while connecting'),
+        'warning',
+        true
+      );
+      return;
+    }
+    this.connecting = true;
+
+    try {
+      this.setConnectionState('connecting');
+
+      this.preConnectCleanup();
+
+      if (this.chatStore && !this.chatWired) {
+        this.wireChatStore(true);
+      }
+
+      // 1) Token
+      let ephemeralKey: string;
+      try {
+        const fn = this.options.tokenProvider;
+        if (typeof fn !== 'function')
+          throw new Error('tokenProvider is not set');
+        ephemeralKey = await fn();
+        if (!ephemeralKey) throw new Error('Empty ephemeral token');
+      } catch (e: any) {
+        this.setConnectionState('error');
+        this.errorHandler.handle('fetch_token', e, 'critical', false);
+        throw e;
+      }
+
+      // 2) PeerConnection
+      const pc = this.peerConnectionManager.create();
+
+      // 3) Remote stream
+      this.mediaManager.setupRemoteStream(pc);
+
+      // 4) Local media — пробуем взять микрофон; если нет — fallback recvonly
+      let gotLocal = false;
+      try {
+        const stream = await this.mediaManager.getUserMedia();
+        this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
+        gotLocal = true;
+      } catch (e: any) {
+        this.errorHandler.handle('get_user_media', e, 'warning', true);
+        if (this.options.allowConnectWithoutMic !== false) {
+          try {
+            // @ts-ignore
+            if (typeof (pc as any).addTransceiver === 'function') {
+              // audio recvonly — получать звук ассистента без локального микрофона
+              // @ts-ignore
+              (pc as any).addTransceiver('audio', { direction: 'recvonly' });
+              this.successHandler.iosTransceiverSetted?.();
+              this.options.logger?.info?.(
+                '[RealtimeClient] Using recvonly audio (no local mic permission)'
+              );
+            } else {
+              this.options.logger?.warn?.(
+                '[RealtimeClient] addTransceiver not available; continue without local tracks'
+              );
+            }
+          } catch (e2: any) {
+            this.errorHandler.handle('ios_transceiver', e2, 'warning', true);
+          }
+        } else {
+          // если явно запретили fallback — пробрасываем ошибку
+          throw e;
+        }
+      }
+
+      // 5) DataChannel
+      this.dataChannelManager.create(pc, async (evt) => {
+        await this.eventRouter.processIncomingMessage(evt);
+      });
+
+      // 6) Offer
+      const offer = await this.peerConnectionManager.createOffer();
+      await this.peerConnectionManager.setLocalDescription(offer);
+
+      // 7) ICE
+      await this.peerConnectionManager.waitForIceGathering();
+
+      // 8) SDP exchange
+      const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
+      await this.peerConnectionManager.setRemoteDescription(answer);
+    } catch (e: any) {
+      if (this.getStatus() !== 'error') {
+        this.setConnectionState('error');
+        this.errorHandler.handle('init_peer_connection', e);
+      }
+      throw e;
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  async disconnect() {
+    if (this.disconnecting) return;
+    this.disconnecting = true;
+
+    try {
+      this.successHandler.hangUpStarted();
+
+      try {
+        this.dataChannelManager.close();
+      } catch {}
+      try {
+        this.mediaManager.cleanup();
+      } catch {}
+      try {
+        this.peerConnectionManager.close();
+      } catch {}
+      try {
+        this.eventRouter.cleanup();
+      } catch {}
+
+      this.chatWired = false;
+
+      if (
+        this.options.deleteChatHistoryOnDisconnect !== false &&
+        this.chatStore
+      ) {
+        try {
+          this.options.logger?.debug?.(
+            '[RealtimeClient] Destroying chat history'
+          );
+          this.chatStore.destroy();
+        } catch {}
+      } else {
+        try {
+          this.options.logger?.debug?.(
+            '[RealtimeClient] Preserving chat history on disconnect'
+          );
+        } catch {}
+      }
+
+      this.setConnectionState('disconnected');
+      this.successHandler.hangUpDone();
+    } catch (e: any) {
+      this.errorHandler.handle('hangup', e, 'warning', true);
+    } finally {
+      this.disconnecting = false;
+    }
+  }
+
+  async sendRaw(event: any): Promise<void> {
+    return this.messageSender.sendRaw(event);
+  }
+
+  sendResponse(): void;
+  sendResponse(params: ResponseCreateParams): void;
+  sendResponse(params?: any): void {
+    this.messageSender.sendResponse(params);
+  }
+
+  sendResponseStrict(options: ResponseCreateStrict) {
+    this.messageSender.sendResponseStrict(options);
+  }
+
+  updateSession(patch: Partial<any>) {
+    this.messageSender.updateSession(patch);
+  }
+
+  sendToolOutput(call_id: string, output: any) {
+    this.messageSender.sendToolOutput(call_id, output);
+  }
+
+  // Текст
+  public async sendTextMessage(
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'default' | 'none';
+    }
+  ): Promise<void> {
+    const msg = (text ?? '').trim();
+    if (!msg) return;
+    if (!this.isConnected()) throw new Error('Not connected');
+
+    await this.sendRaw({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: msg }],
+      },
+    });
+
+    const modality =
+      options?.responseModality ??
+      (this.currentMode === 'text' ? 'text' : 'audio');
+
+    this.sendResponseStrict({
+      instructions:
+        options?.instructions ?? 'Ответь на сообщение пользователя.',
+      modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
+      conversation: options?.conversation ?? 'default',
+    });
+  }
+
+  getPeerConnection() {
+    return this.peerConnectionManager.getPeerConnection();
+  }
+
+  getDataChannel() {
+    return this.dataChannelManager.getDataChannel();
+  }
+
+  getLocalStream() {
+    return this.mediaManager.getLocalStream();
+  }
+
+  getRemoteStream() {
+    return this.mediaManager.getRemoteStream();
+  }
+
+  getChat() {
+    return this.chatStore?.get() ?? [];
+  }
+
+  public clearChatHistory() {
+    if (this.chatStore) {
+      this.options.logger?.info?.(
+        '[RealtimeClient] Manually clearing chat history'
+      );
+      this.chatStore.destroy();
+    }
+  }
+
+  onChatUpdate(handler: (chat: any[]) => void) {
+    if (!this.chatStore) {
+      return () => {};
+    }
+    return this.chatStore.subscribe(handler);
+  }
+
+  isConnected() {
+    return this.connectionState === 'connected';
+  }
+}
+import {
+  AddableMessage,
+  ChatMsg,
+  CoreConfig,
+  ExtendedChatMsg,
+  RealtimeClientOptionsBeforePrune,
+  RealTimeClientProps,
+  RealtimeContextValue,
+  TokenProvider,
+  ChatMode,
+} from '@react-native-openai-realtime/types';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  forwardRef,
+  useImperativeHandle,
+} from 'react';
+import { AppState, AppStateStatus } from 'react-native';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
+import { attachChatAdapter } from '@react-native-openai-realtime/adapters';
+import { RealtimeProvider } from '@react-native-openai-realtime/context';
+import { prune } from '@react-native-openai-realtime/helpers';
+
+const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+export type RealTimeClientHandle = {
+  getClient: () => RealtimeClientClass | null;
+  getStatus: () =>
+    | 'idle'
+    | 'connecting'
+    | 'connected'
+    | 'disconnected'
+    | 'error';
+  setTokenProvider: (tp: TokenProvider) => void;
+
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void>;
+
+  sendRaw: (e: any) => Promise<void> | void;
+  sendResponse: (opts?: any) => void;
+  sendResponseStrict: (opts: {
+    instructions: string;
+    modalities?: Array<'audio' | 'text'>;
+    conversation?: 'default' | 'none';
+  }) => void;
+  updateSession: (patch: Partial<any>) => void;
+
+  getMode: () => 'voice' | 'text';
+  switchMode: (mode: 'voice' | 'text') => Promise<void>;
+  sendTextMessage: (
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'default' | 'none';
+    }
+  ) => Promise<void>;
+
+  addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
+  clearAdded: () => void;
+  clearChatHistory: () => void;
+  getNextTs: () => number;
+};
+
+export const RealTimeClient = forwardRef<
+  RealTimeClientHandle,
+  RealTimeClientProps
+>((props, ref) => {
+  const {
+    tokenProvider,
+    webrtc,
+    media,
+    chatInverted,
+    session,
+    autoSessionUpdate,
+    greetEnabled,
+    greetInstructions,
+    greetModalities,
+    onOpen,
+    onEvent,
+    onError,
+    onUserTranscriptionDelta,
+    onUserTranscriptionCompleted,
+    onAssistantTextDelta,
+    onAssistantCompleted,
+    deleteChatHistoryOnDisconnect = true,
+    onToolCall,
+    incomingMiddleware,
+    outgoingMiddleware,
+    policyIsMeaningfulText,
+    chatEnabled,
+    chatIsMeaningfulText,
+    logger,
+    autoConnect = false,
+    attachChat = true,
+    children,
+    chatUserAddOnDelta,
+    chatUserPlaceholderOnStart,
+    chatAssistantAddOnDelta,
+    chatAssistantPlaceholderOnStart,
+
+    // Новые пропсы
+    initialMode = 'voice',
+    onModeChange,
+    allowConnectWithoutMic = true,
+  } = props;
+
+  const clientRef = useRef<RealtimeClientClass | null>(null);
+  const connectionUnsubRef = useRef<(() => void) | null>(null);
+  const detachChatRef = useRef<null | (() => void)>(null);
+
+  const [status, setStatus] = useState<
+    'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
+  >('idle');
+  const [mode, setMode] = useState<'voice' | 'text'>(initialMode);
+  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
+
+  const optionsSnapshot: CoreConfig = useMemo(() => {
+    return prune({
+      tokenProvider,
+      webrtc,
+      media,
+      chatInverted,
+      session,
+      autoSessionUpdate,
+      greet:
+        greetEnabled !== undefined || greetInstructions || greetModalities
+          ? {
+              enabled: greetEnabled ?? true,
+              response: {
+                instructions: greetInstructions,
+                modalities: greetModalities,
+              },
+            }
+          : undefined,
+      hooks: prune({
+        onOpen,
+        onEvent,
+        onError,
+        onUserTranscriptionDelta,
+        onUserTranscriptionCompleted,
+        onAssistantTextDelta,
+        onAssistantCompleted,
+        onToolCall,
+      }) as any,
+      middleware: prune({
+        incoming: incomingMiddleware,
+        outgoing: outgoingMiddleware,
+      }) as any,
+      policy: prune({ isMeaningfulText: policyIsMeaningfulText }),
+      deleteChatHistoryOnDisconnect,
+      chat: prune({
+        enabled: chatEnabled,
+        isMeaningfulText: chatIsMeaningfulText,
+        userAddOnDelta: chatUserAddOnDelta,
+        userPlaceholderOnStart: chatUserPlaceholderOnStart,
+        assistantAddOnDelta: chatAssistantAddOnDelta,
+        assistantPlaceholderOnStart: chatAssistantPlaceholderOnStart,
+      }),
+      logger,
+
+      // НОВОЕ: пробрасываем флаг в ядро
+      allowConnectWithoutMic,
+    }) as CoreConfig;
+  }, [
+    tokenProvider,
+    deleteChatHistoryOnDisconnect,
+    webrtc,
+    media,
+    chatInverted,
+    session,
+    autoSessionUpdate,
+    greetEnabled,
+    greetInstructions,
+    greetModalities,
+    onOpen,
+    onEvent,
+    onError,
+    onUserTranscriptionDelta,
+    onUserTranscriptionCompleted,
+    onAssistantTextDelta,
+    onAssistantCompleted,
+    onToolCall,
+    incomingMiddleware,
+    outgoingMiddleware,
+    policyIsMeaningfulText,
+    chatEnabled,
+    chatIsMeaningfulText,
+    logger,
+    chatUserAddOnDelta,
+    chatUserPlaceholderOnStart,
+    chatAssistantAddOnDelta,
+    chatAssistantPlaceholderOnStart,
+    allowConnectWithoutMic,
+  ]);
+
+  const ensureClient = useCallback(() => {
+    if (!clientRef.current) {
+      clientRef.current = new RealtimeClientClass(
+        optionsSnapshot as RealtimeClientOptionsBeforePrune
+      );
+
+      setStatus(clientRef.current.getConnectionState());
+      const unsub = clientRef.current.onConnectionStateChange((s) =>
+        setStatus(s)
+      );
+      connectionUnsubRef.current = unsub;
+
+      if (tokenProvider) {
+        try {
+          clientRef.current.setTokenProvider(tokenProvider);
+        } catch {}
+      }
+    }
+    return clientRef.current!;
+  }, [optionsSnapshot, tokenProvider]);
+
+  useEffect(() => {
+    if (clientRef.current && tokenProvider) {
+      try {
+        clientRef.current.setTokenProvider(tokenProvider);
+      } catch {}
+    }
+  }, [tokenProvider]);
+
+  useEffect(() => {
+    const onAppState = (state: AppStateStatus) => {
+      if (state === 'background' || state === 'inactive') {
+        clientRef.current?.disconnect().catch(() => {});
+      }
+    };
+    const sub = AppState.addEventListener('change', onAppState);
+    return () => sub.remove();
+  }, []);
+
+  const connect = useCallback(async () => {
+    const client = ensureClient();
+    try {
+      if (attachChat && !detachChatRef.current) {
+        const isMeaningful =
+          chatIsMeaningfulText ??
+          policyIsMeaningfulText ??
+          ((t: string) => !!t.trim());
+        detachChatRef.current = attachChatAdapter(client, setChat, {
+          isMeaningfulText: isMeaningful,
+        });
+      }
+      await client.connect();
+    } catch (e) {
+      throw e;
+    }
+  }, [ensureClient, attachChat, chatIsMeaningfulText, policyIsMeaningfulText]);
+
+  const disconnect = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      await client.disconnect();
+    } finally {
+      if (detachChatRef.current) {
+        detachChatRef.current();
+        detachChatRef.current = null;
+      }
+      if (deleteChatHistoryOnDisconnect) {
+        setChat([]);
+        setAddedMessages([]);
+      }
+    }
+  }, [deleteChatHistoryOnDisconnect]);
+
+  useEffect(() => {
+    if (!autoConnect) return;
+    connect().catch(() => {});
+    return () => {
+      disconnect().catch(() => {});
+    };
+  }, [autoConnect, connect, disconnect]);
+
+  useEffect(() => {
+    if (status === 'connected' && clientRef.current) {
+      if (initialMode === 'text') {
+        clientRef.current
+          .switchMode('text')
+          .then(() => {
+            setMode('text');
+            onModeChange?.('text');
+          })
+          .catch(() => {});
+      } else {
+        setMode('voice');
+        onModeChange?.('voice');
+      }
+    }
+  }, [status, initialMode, onModeChange]);
+
+  const getNextTs = useCallback((): number => {
+    try {
+      const chatMax =
+        (chat?.length ? Math.max(...chat.map((m: any) => m?.ts ?? 0)) : 0) || 0;
+      const addedMax =
+        (addedMessages?.length
+          ? Math.max(...addedMessages.map((m: any) => m?.ts ?? 0))
+          : 0) || 0;
+      const maxTs = Math.max(chatMax, addedMax);
+      return maxTs > 0 ? maxTs + 1 : Date.now();
+    } catch {
+      return Date.now();
+    }
+  }, [chat, addedMessages]);
+
+  const normalize = useCallback(
+    (m: AddableMessage): ExtendedChatMsg => {
+      const base = {
+        id: (m as any).id ?? makeId(),
+        role: (m as any).role ?? 'assistant',
+        ts: (m as any).ts ?? getNextTs(),
+        time: Date.now(),
+      };
+
+      if (
+        (m as any).type === 'ui' ||
+        ('kind' in (m as any) && 'payload' in (m as any))
+      ) {
+        return {
+          ...base,
+          type: 'ui',
+          kind: (m as any).kind,
+          payload: (m as any).payload,
+        } as unknown as ExtendedChatMsg;
+      }
+
+      return {
+        ...base,
+        type: 'text',
+        text: (m as any).text ?? '',
+        status: 'done',
+      } as unknown as ExtendedChatMsg;
+    },
+    [getNextTs]
+  );
+
+  const addMessage = useCallback(
+    (m: AddableMessage | AddableMessage[]) => {
+      const arr = Array.isArray(m) ? m : [m];
+      const normalized = arr.map(normalize);
+      setAddedMessages((prev) => [...prev, ...normalized]);
+      const ids = normalized.map((x) => (x as any).id as string);
+      return Array.isArray(m) ? ids : ids[0];
+    },
+    [normalize]
+  );
+
+  const clearAdded = useCallback(() => setAddedMessages([]), []);
+
+  const mergedChat = useMemo<ExtendedChatMsg[]>(() => {
+    const merged = [...(chat ?? []), ...addedMessages];
+    return chatInverted
+      ? merged.sort((a: any, b: any) => (a.ts ?? 0) - (b.ts ?? 0))
+      : merged.sort((a: any, b: any) => (b.ts ?? 0) - (a.ts ?? 0));
+  }, [chat, addedMessages, chatInverted]);
+
+  const clearChatHistory = useCallback(() => {
+    clientRef.current?.clearChatHistory();
+  }, []);
+
+  const switchMode = useCallback(
+    async (newMode: ChatMode) => {
+      await clientRef.current?.switchMode(newMode);
+      setMode(newMode);
+      onModeChange?.(newMode);
+    },
+    [onModeChange]
+  );
+
+  const sendTextMessage = useCallback(
+    async (
+      text: string,
+      options?: {
+        responseModality?: 'text' | 'audio';
+        instructions?: string;
+        conversation?: 'default' | 'none';
+      }
+    ) => {
+      await clientRef.current?.sendTextMessage(text, options);
+    },
+    []
+  );
+
+  const value: RealtimeContextValue = useMemo(
+    () => ({
+      client: clientRef.current,
+      status,
+      clearChatHistory,
+      chat: mergedChat,
+      connect,
+      disconnect,
+      sendResponse: (opts?: any) => clientRef.current?.sendResponse(opts),
+      sendResponseStrict: (opts: {
+        instructions: string;
+        modalities?: Array<'audio' | 'text'>;
+        conversation?: 'default' | 'none';
+      }) => clientRef.current?.sendResponseStrict(opts),
+      updateSession: (patch: Partial<any>) =>
+        clientRef.current?.updateSession(patch),
+      sendRaw: (e: any) => clientRef.current?.sendRaw(e),
+      addMessage,
+      clearAdded,
+
+      mode,
+      switchMode,
+      sendTextMessage,
+    }),
+    [
+      status,
+      mergedChat,
+      connect,
+      disconnect,
+      addMessage,
+      clearAdded,
+      clearChatHistory,
+      mode,
+      switchMode,
+      sendTextMessage,
+    ]
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      getClient: () => clientRef.current,
+      getStatus: () => status,
+      setTokenProvider: (tp: TokenProvider) => {
+        try {
+          clientRef.current?.setTokenProvider(tp);
+        } catch {}
+      },
+      connect: async () => {
+        await connect();
+      },
+      disconnect: async () => {
+        await disconnect();
+      },
+      sendRaw: (e: any) => clientRef.current?.sendRaw(e),
+      sendResponse: (opts?: any) => clientRef.current?.sendResponse(opts),
+      sendResponseStrict: (opts) => clientRef.current?.sendResponseStrict(opts),
+      updateSession: (patch) => clientRef.current?.updateSession(patch),
+
+      getMode: () => clientRef.current?.getMode() ?? mode,
+      switchMode,
+      sendTextMessage,
+
+      addMessage,
+      clearAdded,
+      clearChatHistory,
+      getNextTs,
+    }),
+    [
+      status,
+      connect,
+      disconnect,
+      addMessage,
+      clearAdded,
+      clearChatHistory,
+      getNextTs,
+      mode,
+      switchMode,
+      sendTextMessage,
+    ]
+  );
+
+  const renderedChildren =
+    typeof children === 'function' ? (children as any)(value) : children;
+
+  return (
+    <RealtimeProvider value={value}>
+      {renderedChildren ?? null}
+    </RealtimeProvider>
+  );
+});
+export * from './RealtimeClientClass';
+export * from './RealTimeClient';
+import { RealtimeContext } from '@react-native-openai-realtime/context';
+import { useContext } from 'react';
+import type { RealtimeContextValue } from '@react-native-openai-realtime/types';
+
+export function useRealtime(): RealtimeContextValue {
+  // ✅ Получаем контекст
+  const context = useContext(RealtimeContext);
+
+  // ✅ Проверяем, что контекст существует
+  if (!context) {
+    throw new Error('useRealtime must be used within a RealtimeProvider');
+  }
+
+  return context;
+}
+import { useEffect, useRef, useState } from 'react';
+import { useRealtime } from '@react-native-openai-realtime/hooks';
+import type { RealtimeClientClass } from '@react-native-openai-realtime/components';
+
+type Mode = 'server' | 'stats' | 'auto';
+
+export type UseMicrophoneActivityOptions = {
+  client?: RealtimeClientClass | null;
+  mode?: Mode; // default: 'auto'
+  silenceMs?: number; // таймаут без "дельт", после которого считаем тишину (по server-событиям)
+  levelThreshold?: number; // порог срабатывания для stats-режима
+  pollInterval?: number; // период опроса getStats
+};
+
+export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
+  const { client: ctxClient } = useRealtime();
+  const client = opts?.client ?? (ctxClient as RealtimeClientClass | null);
+  const [isMicActive, setIsMicActive] = useState(false);
+  const [level, setLevel] = useState(0);
+  const [isCapturing, setIsCapturing] = useState(false);
+
+  const lastHeardRef = useRef<number>(0);
+  const silenceMs = opts?.silenceMs ?? 600;
+  const threshold = opts?.levelThreshold ?? 0.02;
+  const pollInterval = opts?.pollInterval ?? 250;
+  const mode = opts?.mode ?? 'auto';
+
+  useEffect(() => {
+    if (!client) return;
+
+    // server-mode: активируем активность на дельты пользователя
+    let unsubDelta: (() => void) | null = null;
+    let unsubCompleted: (() => void) | null = null;
+    let silenceTimer: any = null;
+
+    const enableServer = mode === 'server' || mode === 'auto';
+    if (enableServer) {
+      unsubDelta = client.on('user:delta', () => {
+        lastHeardRef.current = Date.now();
+        setIsMicActive(true);
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => {
+          if (Date.now() - lastHeardRef.current >= silenceMs) {
+            setIsMicActive(false);
+          }
+        }, silenceMs + 20);
+      });
+      unsubCompleted = client.on('user:completed', () => {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => setIsMicActive(false), silenceMs / 2);
+      });
+    }
+
+    // stats-mode: опрашиваем audioLevel локального sender'а
+    let poll: any = null;
+    const enableStats = mode !== 'server'; // stats | auto
+    if (enableStats) {
+      poll = setInterval(async () => {
+        try {
+          const pc = client.getPeerConnection?.();
+          if (!pc || !pc.getSenders) return;
+          const senders = pc.getSenders();
+          const audioSender = senders.find(
+            (s: any) => s.track && s.track.kind === 'audio'
+          );
+          if (!audioSender || !audioSender.getStats) return;
+
+          // заодно проверим "идёт ли захват"
+          const localStream = client.getLocalStream?.();
+          const capturing =
+            !!localStream &&
+            typeof localStream.getAudioTracks === 'function' &&
+            localStream
+              .getAudioTracks()
+              .some((t: any) => t.enabled && t.readyState === 'live');
+          setIsCapturing(capturing);
+
+          const stats = await audioSender.getStats();
+          let lvl = 0;
+          stats.forEach((r: any) => {
+            if (r.type === 'media-source' && typeof r.audioLevel === 'number') {
+              lvl = Math.max(lvl, r.audioLevel);
+            }
+            if (r.type === 'track' && typeof r.audioLevel === 'number') {
+              lvl = Math.max(lvl, r.audioLevel);
+            }
+            if (
+              typeof r.totalAudioEnergy === 'number' &&
+              typeof r.totalSamplesDuration === 'number' &&
+              r.totalSamplesDuration > 0
+            ) {
+              const energy = r.totalAudioEnergy / r.totalSamplesDuration;
+              lvl = Math.max(lvl, Math.min(1, Math.sqrt(energy)));
+            }
+            if (typeof r.audioInputLevel === 'number') {
+              // старые реализации: 0..32767
+              lvl = Math.max(lvl, Math.min(1, r.audioInputLevel / 32767));
+            }
+          });
+          setLevel(lvl);
+
+          if (mode === 'stats') {
+            setIsMicActive(lvl > threshold);
+          }
+          if (mode === 'auto') {
+            // если не было server-дэлт давно — ориентируемся на stats
+            if (Date.now() - lastHeardRef.current > 2 * silenceMs) {
+              setIsMicActive(lvl > threshold);
+            }
+          }
+        } catch {
+          // no-op
+        }
+      }, pollInterval);
+    } else {
+      // хотя бы проверим isCapturing
+      const local = client.getLocalStream?.();
+      const capturing =
+        !!local &&
+        typeof local.getAudioTracks === 'function' &&
+        local
+          .getAudioTracks()
+          .some((t: any) => t.enabled && t.readyState === 'live');
+      setIsCapturing(capturing);
+    }
+
+    return () => {
+      if (unsubDelta) unsubDelta();
+      if (unsubCompleted) unsubCompleted();
+      if (silenceTimer) clearTimeout(silenceTimer);
+      if (poll) clearInterval(poll);
+    };
+  }, [client, mode, silenceMs, threshold, pollInterval]);
+
+  return { isMicActive, level, isCapturing };
+}
+import {
+  speechActivityStore,
+  SpeechActivityStoreType,
+} from '@react-native-openai-realtime/middlewares';
+import { useEffect, useState } from 'react';
+import type { SpeechActivityState } from '@react-native-openai-realtime/types';
+
+export function useSpeechActivity(
+  store = speechActivityStore as SpeechActivityStoreType
+) {
+  const [state, setState] = useState<SpeechActivityState>(() => store.get());
+  useEffect(() => store.subscribe(setState) as any, [store]);
+  return state;
+}
+export * from './useRealtime';
+export * from './useSpeechActivity';
+export * from './useMicrophoneActivity';
+export * from './adapters';
+export * from './components';
+export * from './constants';
+export * from './context';
+export * from './handlers';
+export * from './helpers';
+export * from './hooks';
+export * from './managers';
+export * from './middlewares';
+export * from './types';
+import type { SuccessCallbacks } from '@react-native-openai-realtime/types';
+import type { RTCPeerConnection, MediaStreamTrack } from 'react-native-webrtc';
+import { MediaStream } from 'react-native-webrtc';
+import type RTCDataChannel from 'react-native-webrtc/lib/typescript/RTCDataChannel';
+
+export class SuccessHandler {
+  private callbacks: SuccessCallbacks;
+  private onSuccess?: (stage: string, data?: any) => void;
+
+  constructor(
+    callbacks: SuccessCallbacks = {},
+    onSuccess?: (stage: string, data?: any) => void
+  ) {
+    this.callbacks = callbacks;
+    this.onSuccess = onSuccess;
+  }
+
+  hangUpStarted() {
+    this.onSuccess?.('hang_up_started');
+    this.callbacks.onHangUpStarted?.();
+  }
+  hangUpDone() {
+    this.onSuccess?.('hang_up_done');
+    this.callbacks.onHangUpDone?.();
+  }
+
+  peerConnectionCreatingStarted() {
+    this.onSuccess?.('peer_connection_creating_started');
+    this.callbacks.onPeerConnectionCreatingStarted?.();
+  }
+  peerConnectionCreated(pc: RTCPeerConnection) {
+    this.onSuccess?.('peer_connection_created', { pc });
+    this.callbacks.onPeerConnectionCreated?.(pc as any);
+  }
+
+  rtcPeerConnectionStateChange(
+    state:
+      | 'new'
+      | 'connecting'
+      | 'connected'
+      | 'disconnected'
+      | 'failed'
+      | 'closed'
+  ) {
+    this.onSuccess?.('rtc_peer_connection_state_change', { state });
+    this.callbacks.onRTCPeerConnectionStateChange?.(state);
+  }
+
+  getUserMediaSetted(stream: MediaStream) {
+    this.onSuccess?.('get_user_media_setted', { stream });
+    this.callbacks.onGetUserMediaSetted?.(stream as any);
+  }
+  localStreamSetted(stream: MediaStream) {
+    this.onSuccess?.('local_stream_setted', { stream });
+    this.callbacks.onLocalStreamSetted?.(stream as any);
+  }
+  localStreamAddedTrack(track: MediaStreamTrack) {
+    this.onSuccess?.('local_stream_added_track', { track });
+    this.callbacks.onLocalStreamAddedTrack?.(track as any);
+  }
+  localStreamRemovedTrack(track: MediaStreamTrack) {
+    this.onSuccess?.('local_stream_removed_track', { track });
+    this.callbacks.onLocalStreamRemovedTrack?.(track as any);
+  }
+  remoteStreamSetted(stream: MediaStream) {
+    this.onSuccess?.('remote_stream_setted', { stream });
+    this.callbacks.onRemoteStreamSetted?.(stream as any);
+  }
+
+  dataChannelOpen(channel: RTCDataChannel) {
+    this.onSuccess?.('data_channel_open', { channel });
+    this.callbacks.onDataChannelOpen?.(channel);
+  }
+  dataChannelMessage(message: any) {
+    this.onSuccess?.('data_channel_message', { message });
+    this.callbacks.onDataChannelMessage?.(message);
+  }
+  dataChannelClose() {
+    this.onSuccess?.('data_channel_close');
+    this.callbacks.onDataChannelClose?.();
+  }
+
+  iceGatheringComplete() {
+    this.onSuccess?.('ice_gathering_complete');
+    this.callbacks.onIceGatheringComplete?.();
+  }
+  iceGatheringTimeout() {
+    this.onSuccess?.('ice_gathering_timeout');
+    this.callbacks.onIceGatheringTimeout?.();
+  }
+  iceGatheringStateChange(state: string) {
+    this.onSuccess?.('ice_gathering_state_change', { state });
+    this.callbacks.onIceGatheringStateChange?.(state);
+  }
+
+  microphonePermissionGranted() {
+    this.onSuccess?.('microphone_permission_granted');
+    this.callbacks.onMicrophonePermissionGranted?.();
+  }
+  microphonePermissionDenied() {
+    this.onSuccess?.('microphone_permission_denied');
+    this.callbacks.onMicrophonePermissionDenied?.();
+  }
+
+  iosTransceiverSetted() {
+    this.onSuccess?.('ios_transceiver_setted');
+    this.callbacks.onIOSTransceiverSetted?.();
+  }
+}
+export * from './error';
+export * from './success';
+// src/handlers/error.ts
+import type {
+  ErrorEvent,
+  ErrorStage,
+  ErrorSeverity,
+} from '@react-native-openai-realtime/types';
+
+export class ErrorHandler {
+  private onError?: (event: ErrorEvent) => void;
+  private logger?: { error?: (...a: any[]) => void };
+
+  constructor(
+    onError?: (event: ErrorEvent) => void,
+    logger?: { error?: (...a: any[]) => void }
+  ) {
+    this.onError = onError;
+    this.logger = logger;
+  }
+
+  handle(
+    stage: ErrorStage,
+    error: Error | string,
+    severity: ErrorSeverity = 'critical',
+    recoverable: boolean = false,
+    context?: Record<string, any>
+  ) {
+    const errorEvent: ErrorEvent = {
+      stage,
+      error: error instanceof Error ? error : new Error(String(error)),
+      severity,
+      recoverable,
+      timestamp: Date.now(),
+      context,
+    };
+
+    (this.logger?.error ?? console.error)(
+      `[${stage}] ${severity}:`,
+      errorEvent.error,
+      context
+    );
+
+    if (this.onError) {
+      this.onError(errorEvent);
+    }
+    return errorEvent;
+  }
+}
+export function prune<T extends Record<string, any>>(
+  obj?: T
+): Partial<T> | undefined {
+  if (!obj) return undefined;
+  const out: any = {};
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (v === undefined) continue;
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const child = prune(v);
+      if (child && Object.keys(child).length > 0) out[k] = child;
+    } else {
+      out[k] = v;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+import { deepMerge } from '@react-native-openai-realtime/helpers';
+import { DEFAULTS } from '@react-native-openai-realtime/constants';
+
+export function applyDefaults(
+  user: RealtimeClientOptionsBeforePrune
+): RealtimeClientOptionsBeforePrune {
+  const merged = deepMerge<RealtimeClientOptionsBeforePrune>(DEFAULTS, user);
+  // Если greet.enabled true, а instructions не заданы — подставим дефолт
+  if (
+    merged.greet?.enabled &&
+    (!merged.greet.response || !merged.greet.response.instructions)
+  ) {
+    merged.greet = {
+      enabled: true,
+      response: {
+        instructions: DEFAULTS.greet!.response!.instructions!,
+        modalities: DEFAULTS.greet!.response!.modalities,
+      },
+    };
+  }
+  return merged;
+}
+export const VOICE_IDS = [
+  'alloy',
+  'ash',
+  'ballad',
+  'coral',
+  'echo',
+  'sage',
+  'shimmer',
+  'verse',
+] as const;
+
+export type VoiceId = (typeof VOICE_IDS)[number];
+import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
+
+type Emitter = (type: string, payload?: any) => void;
+
+// Достаём input_text из созданного user item (typed-ввод)
+function extractInputTextFromItem(item: any): string | null {
+  try {
+    const content = item?.content;
+    if (!Array.isArray(content)) return null;
+    for (const c of content) {
+      if (!c || typeof c !== 'object') continue;
+      if (c.type === 'input_text' && typeof c.text === 'string') {
+        return c.text;
+      }
+      // На всякий случай: альтернативный формат
+      if (c.type === 'text' && typeof c.text === 'string') {
+        return c.text;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function createDefaultRouter(
+  emit: Emitter,
+  options: RealtimeClientOptionsBeforePrune,
+  functionArgsBuffer: Map<string, string>,
+  sendRaw: (e: any) => void
+) {
+  return async function route(msg: any) {
+    const hooks = options.hooks;
+    hooks?.onEvent?.(msg);
+
+    // Пользовательский item создан
+    if (msg.type === 'conversation.item.created' && msg.item?.role === 'user') {
+      const itemId = msg.item.id;
+      if (itemId) {
+        emit('user:item_started', { itemId });
+      }
+
+      // Если это typed-ввод (input_text) — сразу завершаем как готовое сообщение
+      const typed = extractInputTextFromItem(msg.item);
+      if (itemId && typed && String(typed).trim()) {
+        emit('user:completed', { itemId, transcript: String(typed) });
+      }
+      return;
+    }
+
+    // Ассистент начал ответ
+    if (msg.type === 'response.created') {
+      const responseId = msg.response?.id || msg.response_id;
+      if (responseId) {
+        emit('assistant:response_started', { responseId });
+      }
+      return;
+    }
+
+    // Транскрипция пользователя (аудио → текст)
+    if (msg.type === 'conversation.item.input_audio_transcription.delta') {
+      const itemId = msg.item_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onUserTranscriptionDelta?.({ itemId, delta });
+      if (consumed !== 'consume') {
+        emit('user:delta', { itemId, delta });
+      }
+      return;
+    }
+
+    if (msg.type === 'conversation.item.input_audio_transcription.completed') {
+      const itemId = msg.item_id;
+      const transcript = msg.transcript || '';
+      const consumed = hooks?.onUserTranscriptionCompleted?.({
+        itemId,
+        transcript,
+      });
+      if (consumed !== 'consume') {
+        emit('user:completed', { itemId, transcript });
+      }
+      return;
+    }
+
+    if (msg.type === 'conversation.item.input_audio_transcription.failed') {
+      const itemId = msg.item_id;
+      emit('user:failed', { itemId, error: msg.error });
+      return;
+    }
+
+    if (msg.type === 'conversation.item.truncated') {
+      const itemId = msg.item_id || msg.item?.id;
+      emit('user:truncated', { itemId });
+      return;
+    }
+
+    // Дельты ассистента
+    if (msg.type === 'response.audio_transcript.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'audio_transcript',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', {
+          responseId,
+          delta,
+          channel: 'audio_transcript',
+        });
+      }
+      return;
+    }
+
+    if (msg.type === 'response.output_text.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'output_text',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
+      }
+      return;
+    }
+
+    // Завершение/отмена ответа ассистента
+    if (msg.type === 'response.completed') {
+      const responseId = msg.response_id || msg.response?.id;
+      const consumed = hooks?.onAssistantCompleted?.({
+        responseId,
+        status: 'done',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:completed', { responseId, status: 'done' });
+      }
+      return;
+    }
+
+    if (msg.type === 'response.canceled') {
+      const responseId = msg.response_id || msg.response?.id;
+      const consumed = hooks?.onAssistantCompleted?.({
+        responseId,
+        status: 'canceled',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:completed', { responseId, status: 'canceled' });
+      }
+      return;
+    }
+
+    if (msg.type === 'response.output_text.done') {
+      const responseId = msg.response_id || msg.response?.id;
+      const consumed = hooks?.onAssistantCompleted?.({
+        responseId,
+        status: 'done',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:completed', { responseId, status: 'done' });
+      }
+      return;
+    }
+
+    if (msg.type === 'response.audio_transcript.done') {
+      const responseId = msg.response_id;
+      const consumed = hooks?.onAssistantCompleted?.({
+        responseId,
+        status: 'done',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:completed', { responseId, status: 'done' });
+      }
+      return;
+    }
+
+    // Вызовы инструментов
+    if (msg.type === 'response.function_call_arguments.delta') {
+      const prev = functionArgsBuffer.get(msg.call_id) || '';
+      functionArgsBuffer.set(msg.call_id, prev + (msg.delta || ''));
+      emit('tool:call_delta', {
+        call_id: msg.call_id,
+        name: msg.name,
+        delta: msg.delta || '',
+      });
+      return;
+    }
+
+    if (msg.type === 'response.function_call_arguments.done') {
+      try {
+        const argsStr = functionArgsBuffer.get(msg.call_id) || '{}';
+        functionArgsBuffer.delete(msg.call_id);
+        const args = JSON.parse(argsStr);
+
+        emit('tool:call_done', { call_id: msg.call_id, name: msg.name, args });
+
+        if (options.hooks?.onToolCall) {
+          const output = await options.hooks.onToolCall({
+            name: msg.name,
+            args,
+            call_id: msg.call_id,
+          });
+          if (output !== undefined) {
+            sendRaw({
+              type: 'conversation.item.create',
+              item: {
+                type: 'function_call_output',
+                call_id: msg.call_id,
+                output: JSON.stringify(output),
+              },
+            });
+            sendRaw({ type: 'response.create' });
+          }
+        }
+      } catch (e) {
+        emit('error', { scope: 'tool', error: e });
+      }
+      return;
+    }
+
+    if (msg.type === 'error') {
+      emit('error', { scope: 'server', error: msg.error });
+      options.hooks?.onError?.(msg.error);
+      return;
+    }
+  };
+}
+export function deepMerge<T>(base: Partial<T>, patch?: Partial<T>): T {
+  const out: any = Array.isArray(base)
+    ? [...(base as any)]
+    : { ...(base as any) };
+  if (!patch) {
+    return out;
+  }
+  for (const [k, v] of Object.entries(patch as any)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = deepMerge(out[k] ?? {}, v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+export * from './applyDefaults';
+export * from './createDefaultRouter';
+export * from './deepMerge';
+export * from './prune';
+export * from './voice';
