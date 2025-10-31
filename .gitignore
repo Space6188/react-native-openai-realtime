@@ -29,8 +29,6 @@ DerivedData
 *.xcuserstate
 project.xcworkspace
 **/.xcode.env.local
-.eslintrc.js
-
 
 # Android/IJ
 #

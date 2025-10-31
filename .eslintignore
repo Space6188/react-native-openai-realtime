@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+lib/
+dist/
+build/
+
+# Generated files
+coverage/
+*.log
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Config files that shouldn't be linted
+*.config.js
+jest.setup.ts
+
+# Example app
+example/
+
+# Test files (optional, if you want to lint them remove this line)
+__tests__/
+__mocks__/
+
