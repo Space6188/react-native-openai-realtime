@@ -1682,6 +1682,8 @@ export class RealtimeClientClass {
 
   // Chat
   private chatStore?: ChatStore;
+  // Флаг, что подписки ChatStore уже навешаны на EventRouter
+  private chatWired = false;
 
   constructor(
     userOptions: RealtimeClientOptionsBeforePrune,
@@ -1804,8 +1806,10 @@ export class RealtimeClientClass {
     return () => this.connectionListeners.delete(listener);
   }
 
-  private wireChatStore() {
+  // Перевес подписок ChatStore на EventRouter; force=true — принудительно
+  private wireChatStore(force = false) {
     if (!this.chatStore) return;
+    if (this.chatWired && !force) return;
 
     this.on('user:item_started', ({ itemId }) =>
       this.chatStore!.startUser(itemId)
@@ -1831,6 +1835,8 @@ export class RealtimeClientClass {
     this.on('assistant:completed', ({ responseId, status }) =>
       this.chatStore!.finalize('assistant', responseId, status)
     );
+
+    this.chatWired = true;
   }
 
   on(type: string, handler: Listener) {
@@ -1869,6 +1875,12 @@ export class RealtimeClientClass {
 
       // Очистим возможные «хвосты», если предыдущая сессия не закрылась
       this.preConnectCleanup();
+
+      // После disconnect() EventRouter.cleanup() очищает подписки.
+      // Восстановим подписки ChatStore перед началом приёма событий.
+      if (this.chatStore && !this.chatWired) {
+        this.wireChatStore(true);
+      }
 
       // 1) Token
       let ephemeralKey: string;
@@ -1939,6 +1951,9 @@ export class RealtimeClientClass {
       try {
         this.eventRouter.cleanup();
       } catch {}
+      // Подписки EventRouter очищены — отметим, что их нужно перевесить при следующем connect()
+      this.chatWired = false;
+
       if (
         this.options.deleteChatHistoryOnDisconnect !== false &&
         this.chatStore
@@ -2038,14 +2053,16 @@ import {
   RealtimeClientOptionsBeforePrune,
   RealTimeClientProps,
   RealtimeContextValue,
+  TokenProvider,
 } from '@react-native-openai-realtime/types';
-import React, {
-  FC,
+import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  forwardRef,
+  useImperativeHandle,
 } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { RealtimeClientClass } from '@react-native-openai-realtime/components';
@@ -2055,7 +2072,41 @@ import { prune } from '@react-native-openai-realtime/helpers';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
+// Императивный интерфейс провайдера
+export type RealTimeClientHandle = {
+  getClient: () => RealtimeClientClass | null;
+  getStatus: () =>
+    | 'idle'
+    | 'connecting'
+    | 'connected'
+    | 'disconnected'
+    | 'error';
+  setTokenProvider: (tp: TokenProvider) => void;
+
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void>;
+
+  sendRaw: (e: any) => Promise<void> | void;
+  sendResponse: (opts?: any) => void;
+  sendResponseStrict: (opts: {
+    instructions: string;
+    modalities?: Array<'audio' | 'text'>;
+    conversation?: 'default' | 'none';
+  }) => void;
+  updateSession: (patch: Partial<any>) => void;
+
+  addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
+  clearAdded: () => void;
+  clearChatHistory: () => void;
+
+  // опционально: получить следующий корректный ts
+  getNextTs: () => number;
+};
+
+export const RealTimeClient = forwardRef<
+  RealTimeClientHandle,
+  RealTimeClientProps
+>((props, ref) => {
   const {
     tokenProvider,
     webrtc,
@@ -2100,7 +2151,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
-  // Snapshot опций (не создаёт клиента)
+  // Собираем snapshot опций (прежнее поведение)
   const optionsSnapshot: CoreConfig = useMemo(() => {
     return prune({
       tokenProvider,
@@ -2176,21 +2227,19 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     chatAssistantPlaceholderOnStart,
   ]);
 
-  // Создаём клиента лениво
+  // Создание клиента лениво
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
       clientRef.current = new RealtimeClientClass(
         optionsSnapshot as RealtimeClientOptionsBeforePrune
       );
 
-      // Подписка на статус
       setStatus(clientRef.current.getConnectionState());
       const unsub = clientRef.current.onConnectionStateChange((s) =>
         setStatus(s)
       );
       connectionUnsubRef.current = unsub;
 
-      // Прокинем tokenProvider, если обновится
       if (tokenProvider) {
         try {
           clientRef.current.setTokenProvider(tokenProvider);
@@ -2200,7 +2249,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     return clientRef.current!;
   }, [optionsSnapshot, tokenProvider]);
 
-  // Обновляем tokenProvider внутри уже созданного клиента
+  // Обновление tokenProvider на лету
   useEffect(() => {
     if (clientRef.current && tokenProvider) {
       try {
@@ -2209,7 +2258,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     }
   }, [tokenProvider]);
 
-  // Разрываем соединение при уходе в фон
+  // Фон → disconnect
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background' || state === 'inactive') {
@@ -2220,6 +2269,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     return () => sub.remove();
   }, []);
 
+  // Подключение/отключение
   const connect = useCallback(async () => {
     const client = ensureClient();
     try {
@@ -2248,12 +2298,14 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
         detachChatRef.current();
         detachChatRef.current = null;
       }
-      setChat([]);
-      setAddedMessages([]);
+      if (deleteChatHistoryOnDisconnect) {
+        setChat([]);
+        setAddedMessages([]);
+      }
     }
-  }, []);
+  }, [deleteChatHistoryOnDisconnect]);
 
-  // Автоконнект опционально
+  // Автоконнект
   useEffect(() => {
     if (!autoConnect) return;
     connect().catch(() => {});
@@ -2263,30 +2315,56 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoConnect]);
 
-  // Нормализация пользовательских UI-сообщений
-  const normalize = useCallback((m: AddableMessage): ExtendedChatMsg => {
-    const base = {
-      id: m.id ?? makeId(),
-      role: m.role ?? 'assistant',
-      ts: m.ts ?? Date.now(),
-    };
-    if (
-      (m as any).type === 'ui' ||
-      ('kind' in (m as any) && 'payload' in (m as any))
-    ) {
+  // Считаем nextTs на основе текущей ленты (встроенный чат + ваши добавленные)
+  const getNextTs = useCallback((): number => {
+    try {
+      const chatMax =
+        (chat?.length ? Math.max(...chat.map((m: any) => m?.ts ?? 0)) : 0) || 0;
+      const addedMax =
+        (addedMessages?.length
+          ? Math.max(...addedMessages.map((m: any) => m?.ts ?? 0))
+          : 0) || 0;
+      const maxTs = Math.max(chatMax, addedMax);
+      return maxTs > 0 ? maxTs + 1 : Date.now();
+    } catch {
+      return Date.now();
+    }
+  }, [chat, addedMessages]);
+
+  // Нормализация пользовательских сообщений — ВАЖНО: синхронизируем time/ts/статус
+  const normalize = useCallback(
+    (m: AddableMessage): ExtendedChatMsg => {
+      const base = {
+        id: (m as any).id ?? makeId(),
+        role: (m as any).role ?? 'assistant',
+        // Синхрон с ChatStore: ts — монотонный порядок
+        ts: (m as any).ts ?? getNextTs(),
+        // time обязателен и в ChatMsg, и в UIChatMsg
+        time: Date.now(),
+      };
+
+      if (
+        (m as any).type === 'ui' ||
+        ('kind' in (m as any) && 'payload' in (m as any))
+      ) {
+        return {
+          ...base,
+          type: 'ui',
+          kind: (m as any).kind,
+          payload: (m as any).payload,
+        } as unknown as ExtendedChatMsg;
+      }
+
+      // Локальный text-баббл: ставим статус 'done', чтобы удовлетворить ChatMsg
       return {
         ...base,
-        type: 'ui',
-        kind: (m as any).kind,
-        payload: (m as any).payload,
-      } as ExtendedChatMsg;
-    }
-    return {
-      ...base,
-      type: 'text',
-      text: (m as any).text ?? '',
-    } as unknown as ExtendedChatMsg;
-  }, []);
+        type: 'text',
+        text: (m as any).text ?? '',
+        status: 'done',
+      } as unknown as ExtendedChatMsg;
+    },
+    [getNextTs]
+  );
 
   const addMessage = useCallback(
     (m: AddableMessage | AddableMessage[]) => {
@@ -2310,8 +2388,9 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
 
   const clearChatHistory = useCallback(() => {
     clientRef.current?.clearChatHistory();
-  }, [clientRef]);
-  // ВАЖНО: провайдер всегда рендерится — без if (!client) return null
+  }, []);
+
+  // Контекст — без изменений
   const value: RealtimeContextValue = useMemo(
     () => ({
       client: clientRef.current,
@@ -2343,6 +2422,44 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
     ]
   );
 
+  // Императивный API
+  useImperativeHandle(
+    ref,
+    () => ({
+      getClient: () => clientRef.current,
+      getStatus: () => status,
+      setTokenProvider: (tp: TokenProvider) => {
+        try {
+          clientRef.current?.setTokenProvider(tp);
+        } catch {}
+      },
+      connect: async () => {
+        await connect();
+      },
+      disconnect: async () => {
+        await disconnect();
+      },
+      sendRaw: (e: any) => clientRef.current?.sendRaw(e),
+      sendResponse: (opts?: any) => clientRef.current?.sendResponse(opts),
+      sendResponseStrict: (opts) => clientRef.current?.sendResponseStrict(opts),
+      updateSession: (patch) => clientRef.current?.updateSession(patch),
+
+      addMessage,
+      clearAdded,
+      clearChatHistory,
+      getNextTs,
+    }),
+    [
+      status,
+      connect,
+      disconnect,
+      addMessage,
+      clearAdded,
+      clearChatHistory,
+      getNextTs,
+    ]
+  );
+
   const renderedChildren =
     typeof children === 'function' ? (children as any)(value) : children;
 
@@ -2351,7 +2468,7 @@ export const RealTimeClient: FC<RealTimeClientProps> = (props) => {
       {renderedChildren ?? null}
     </RealtimeProvider>
   );
-};
+});
 export * from './RealtimeClientClass';
 export * from './RealTimeClient';
 import { RealtimeContext } from '@react-native-openai-realtime/context';

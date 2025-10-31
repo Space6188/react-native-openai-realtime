@@ -1,4 +1,5 @@
- 
+/* eslint-disable react-native/no-inline-styles */
+
 import React, {useEffect, useMemo, useState} from 'react';
 import {
   ActivityIndicator,
@@ -96,8 +97,13 @@ export const KitchenSinkRealtimeDemo: React.FC<Props> = ({
     );
     const a3 = client.on(
       'assistant:completed',
-      ({responseId, status}: {responseId: string; status: string}) =>
-        console.log('[assistant:completed]', responseId, status),
+      ({
+        responseId,
+        status: nestedStatus,
+      }: {
+        responseId: string;
+        status: string;
+      }) => console.log('[assistant:completed]', responseId, nestedStatus),
     );
     const t1 = client.on(
       'tool:call_delta',
@@ -531,7 +537,6 @@ export const KitchenSinkRealtimeDemo: React.FC<Props> = ({
         </View>
       </View>
 
-      {/* Доп. кнопки под чатом */}
       <View style={{height: 40}} />
       <View style={styles.row}>
         <Button

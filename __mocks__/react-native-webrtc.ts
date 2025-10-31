@@ -52,7 +52,7 @@ class MockRTCDataChannel {
     this.label = label;
     setTimeout(() => this.onopen?.(), 0);
   }
-  send(data: any) {}
+  send(_data: any) {}
   close() {
     this.readyState = 'closed';
     this.onclose?.();
@@ -79,14 +79,14 @@ export class RTCPeerConnection {
 
   private _senders: any[] = [];
 
-  createDataChannel(label: string, init?: any) {
+  createDataChannel(label: string, _init?: any) {
     if (!label || typeof label !== 'string') {
       throw new TypeError('Invalid label');
     }
     return new MockRTCDataChannel(label) as any;
   }
 
-  createOffer(options?: any) {
+  createOffer(_options?: any) {
     this.connectionState = 'connecting';
     this.onconnectionstatechange?.();
     // Сообщим об окончании ICE
@@ -109,7 +109,7 @@ export class RTCPeerConnection {
     return Promise.resolve();
   }
 
-  addTrack(track: MediaStreamTrack, stream: MediaStream) {
+  addTrack(track: MediaStreamTrack, _stream: MediaStream) {
     this._senders.push({
       track,
       getStats: async () =>

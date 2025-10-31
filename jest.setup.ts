@@ -1,5 +1,5 @@
 // jest.setup.ts
-(global as any).fetch = jest.fn(async (url: any, init?: any) => {
+(global as any).fetch = jest.fn(async (url: any, _init?: any) => {
   if (typeof url === 'string' && url.includes('/realtime/session')) {
     return {
       ok: true,

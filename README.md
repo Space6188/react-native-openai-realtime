@@ -1,4 +1,4 @@
-# react-native-openai-realtime — Полная документация
+# react-native-openai-realtime
 
 **Библиотека - готовый каркас для голосового/текстового чата с OpenAI Realtime (WebRTC + DataChannel) в React Native.**
 
@@ -9,6 +9,7 @@
 - Архитектура
 - Lifecycle и инициализация
 - Компонент RealTimeClient (провайдер)
+- Императивный API через ref (RealTimeClientHandle)
 - Контекст: RealtimeContextValue
 - Хуки
   - useRealtime
@@ -50,6 +51,8 @@
   - Tools: авто-режим vs ручной
   - VAD: тюнинг и fallback
   - Встроенный чат vs ручной чат
+  - Аудио-сессия и эхоподавление (InCallManager)
+  - GlobalRealtimeProvider с ref и onToolCall
 - TypeScript Tips
 - Troubleshooting / FAQ
 
@@ -198,6 +201,10 @@ function YourScreen() {
 
 **Зачем нужно**: защитный механизм от утечек ресурсов при повторных подключениях. Если предыдущая сессия не закрылась корректно, `preConnectCleanup()` очистит "хвосты" перед созданием нового соединения.
 
+### Примечание о reconnect и ChatStore
+
+После `disconnect()` внутренние подписки `EventRouter` очищаются, а при новом `connect()` библиотека автоматически перевешивает подписки `ChatStore` (история чата сохраняется, если `deleteChatHistoryOnDisconnect={false}`).
+
 ---
 
 ## Компонент RealTimeClient (провайдер)
@@ -247,6 +254,140 @@ function YourScreen() {
 - onSuccess/SuccessCallbacks являются частью низкоуровневого класса RealtimeClientClass (через SuccessHandler). Компонент RealTimeClient их не принимает.
 - **SuccessHandler** принимает как детализированные коллбеки из `SuccessCallbacks`, так и универсальный `onSuccess(stage: string, data?: any)`.
 - **chatInverted** управляет сортировкой в mergedChat: false = новые сверху, true = старые сверху
+- Компонент поддерживает `forwardRef` для императивного API (см. раздел "Императивный API через ref")
+
+### attachChat (проп)
+
+Управляет подпиской встроенного ChatStore на контекст:
+
+- **attachChat={true}** (по умолчанию) — `ctx.chat` получает обновления от встроенного ChatStore
+- **attachChat={false}** — `ctx.chat` остаётся пустым массивом `[]`, но ChatStore продолжает работать внутри клиента
+
+**Когда использовать `attachChat={false}`:**
+
+- Вы строите собственный UI чата через `client.onChatUpdate()` напрямую
+- Хотите избежать лишних ре-рендеров контекста
+- Используете несколько провайдеров с разными чатами
+
+**Пример:**
+
+```typescript
+<RealTimeClient attachChat={false} chatEnabled={true}>
+  <MyCustomChat /> {/* ctx.chat будет [], но client.getChat() работает */}
+</RealTimeClient>
+```
+
+**Важно:** `attachChat` не влияет на работу ChatStore — он продолжает накапливать сообщения, доступные через `client.getChat()`.
+
+---
+
+## Императивный API через ref (RealTimeClientHandle)
+
+`RealTimeClient` поддерживает `forwardRef` и экспортирует императивный API — удобно вызывать методы вне React‑дерева (например, в `onToolCall`, Portal, глобальных обработчиках).
+
+### TypeScript интерфейс
+
+```ts
+export type RealTimeClientHandle = {
+  // Статусы/ссылки
+  getClient: () => RealtimeClientClass | null;
+  getStatus: () =>
+    | 'idle'
+    | 'connecting'
+    | 'connected'
+    | 'disconnected'
+    | 'error';
+  setTokenProvider: (tp: TokenProvider) => void;
+
+  // Соединение
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void>;
+
+  // Отправка
+  sendRaw: (e: any) => Promise<void> | void;
+  sendResponse: (opts?: any) => void;
+  sendResponseStrict: (opts: {
+    instructions: string;
+    modalities?: Array<'audio' | 'text'>;
+    conversation?: 'default' | 'none';
+  }) => void;
+  updateSession: (patch: Partial<any>) => void;
+
+  // Чат (локальные UI-бабблы)
+  addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
+  clearAdded: () => void;
+  clearChatHistory: () => void;
+
+  // Утилита: следующий корректный ts
+  getNextTs: () => number;
+};
+```
+
+### Мини‑пример
+
+```tsx
+import React, { useRef } from 'react';
+import {
+  RealTimeClient,
+  type RealTimeClientHandle,
+} from 'react-native-openai-realtime';
+
+export default function App() {
+  const rtcRef = useRef<RealTimeClientHandle>(null);
+
+  const addUi = () => {
+    rtcRef.current?.addMessage({
+      type: 'ui',
+      role: 'system',
+      kind: 'hint',
+      payload: { text: 'Подсказка ✨' },
+    });
+  };
+
+  return (
+    <RealTimeClient ref={rtcRef} tokenProvider={async () => 'EPHEMERAL_TOKEN'}>
+      {/* ... */}
+    </RealTimeClient>
+  );
+}
+```
+
+### Когда использовать ref vs контекст
+
+- **Контекст/хуки**: реактивный UI (`ctx.chat`, `ctx.status`, `sendResponse` и т. п.) — используйте `useRealtime()` / `useSpeechActivity()` / `useMicrophoneActivity()`
+- **ref**: императивные вызовы из `onToolCall` / эффектов / порталов (добавление UI‑сообщений, быстрый `updateSession`, массовые операции)
+
+**Примечания:**
+
+- `ref` — дополнение к контексту (хуки `useRealtime`/`useSpeechActivity`/`useMicrophoneActivity` продолжают работать как раньше)
+- `addMessage` через `ref` не отправляет событие на сервер — это локальные UI‑пузырьки
+
+### getNextTs() — утилита для ручной сортировки
+
+Возвращает следующий корректный `ts` для ручного добавления сообщений:
+
+```typescript
+const rtcRef = useRef<RealTimeClientHandle>(null);
+
+// Добавление сообщения с ручным контролем порядка
+const addCustomMessage = () => {
+  const nextTs = rtcRef.current?.getNextTs() ?? Date.now();
+
+  rtcRef.current?.addMessage({
+    type: 'ui',
+    kind: 'custom',
+    role: 'assistant',
+    ts: nextTs, // явный порядок
+    payload: { text: 'Custom message' },
+  });
+};
+```
+
+**Когда нужно:**
+
+- Вставка сообщений с гарантированным порядком
+- Синхронизация с внешними системами (например, websocket чат)
+- Дебаггинг и тестирование сортировки
 
 ---
 
@@ -269,14 +410,39 @@ function YourScreen() {
 | **clearAdded**       | **() => void**                                                     | **Очистить только ваши добавленные UI-сообщения (не трогает ChatStore).**                          |
 | **clearChatHistory** | **() => void**                                                     | **Очистить встроенный ChatStore (user/assistant сообщения).**                                      |
 
-### Нормализация сообщений в addMessage
+### Нормализация сообщений (addMessage)
 
 Внутри `RealTimeClient` используется метод `normalize()` для обработки входящих сообщений:
 
-- Автоматически генерирует `id` если не указан
-- Устанавливает `role: 'assistant'` по умолчанию
-- Добавляет timestamp (`ts`)
-- Определяет тип сообщения (`text` или `ui`) по наличию полей
+- **id** генерируется автоматически (если не указан)
+- **ts** выставляется автоматически как монотонная последовательность: `nextTs = max(ts в текущей ленте) + 1`
+- **time** всегда проставляется как `Date.now()` для всех типов сообщений (и для `text`, и для `ui`)
+- Если `type='text'`, сообщение получает `status: 'done'` (для совместимости с `ChatMsg`)
+
+Это гарантирует стабильный порядок при объединении сообщений `ChatStore` и ваших UI‑сообщений.
+
+### Разница между ts и time
+
+- **ts** (timestamp sequence) — **порядковый номер** для сортировки в ленте. Монотонный счётчик, не привязан к реальному времени.
+- **time** — **реальная метка времени** (`Date.now()`) создания сообщения.
+
+**Зачем нужны оба:**
+
+- `ts` — корректная сортировка при объединении `ChatStore` и `addedMessages` (независимо от задержек сети)
+- `time` — отображение времени создания в UI (например, "2 минуты назад")
+
+**Пример:**
+
+```typescript
+// Сообщения могут приходить не по порядку, но ts гарантирует правильную сортировку
+{ id: 'msg1', ts: 100, time: 1704067200000 } // 10:00:00
+{ id: 'msg2', ts: 101, time: 1704067199000 } // 09:59:59 (пришло позже, но ts больше)
+
+// После сортировки по ts:
+[msg1, msg2] // корректный порядок диалога
+```
+
+**В addMessage():** оба поля проставляются автоматически, но можно переопределить `ts` для ручного управления порядком.
 
 ### Типы чата:
 
@@ -319,8 +485,9 @@ type ExtendedChatMsg = ChatMsg | UIChatMsg;
 **Важное различие:**
 
 - **ts** — порядковый номер для корректной сортировки сообщений
-- **time** — реальная метка времени создания (Date.now())
-- **time** может отсутствовать в UI-сообщениях, добавленных через `addMessage()` (баг в `normalize()`)
+- **time** — реальная метка времени создания (`Date.now()`), всегда проставляется автоматически
+
+Это значит, что для простого UI‑баббла достаточно указать `type='ui'` / `kind` / `payload`: порядок (`ts`) и время (`time`) будут корректными без ручной установки.
 
 ### Пример добавления UI-сообщения:
 
@@ -484,7 +651,14 @@ function SpeechIndicator() {
 - Добавляется hint: 'Failed to JSON.parse DataChannel message'
 - Ошибка recoverable (не критическая), соединение продолжает работать
 
-Примечание: если onToolCall вернёт значение — по умолчанию отправляется function_call_output и тут же делается response.create (follow-up).
+**Примечание:** если `onToolCall` вернёт значение — по умолчанию отправляется `function_call_output` и тут же делается `response.create` (follow-up).
+
+**⚠️ Важно:** Wildcard‑подписки вида `'user:*'` **не поддерживаются**. Подписывайтесь на точные строки:
+
+- `user:item_started` | `user:delta` | `user:completed` | `user:failed` | `user:truncated`
+- `assistant:response_started` | `assistant:delta` | `assistant:completed`
+- `tool:call_delta` | `tool:call_done`
+- `error`
 
 ---
 
@@ -522,12 +696,38 @@ type OutgoingMiddleware =
 - **incoming**: дергать setState по audio_buffer событиям, «косметика» дельт, автокоррекция входящих.
 - **outgoing**: тримминг пустых input_text, добавление метаданных, блокировка cancel.
 
+### Порядок обработки входящих событий
+
+1. **Incoming middleware** — перехватчики обрабатывают сырое событие
+2. **Router (createDefaultRouter)** — маршрутизирует в "удобные" события
+3. **hooks.onEvent** — вызывается **внутри router** (после middleware, но до emit)
+
+**Схема:**
+
+```
+DataChannel → incoming middleware (может изменить/остановить) → router → onEvent hook → emit('user:*', 'assistant:*', ...) → ваши подписки on()
+```
+
+**Пример влияния middleware на onEvent:**
+
+```typescript
+incomingMiddleware={[
+  ({ event }) => {
+    if (event.type === 'response.audio_transcript.delta' && !event.delta.trim()) {
+      return 'stop'; // onEvent НЕ вызовется для этого события
+    }
+  }
+]}
+```
+
+**Важно:** Если middleware вернёт `'stop'`, событие не дойдёт до router, `onEvent` и ваши подписки `client.on()` не будут вызваны.
+
 ---
 
 ## Встроенный чат: ChatStore/ChatAdapter/ExtendedChatMsg
 
 - **ChatStore** — отслеживает дельты user/assistant, создаёт/обновляет/финализирует сообщения, фильтрует «пустое» по isMeaningfulText.
-- **ChatAdapter** — подписывает внешний setChat на обновления чат-стора.
+- **ChatAdapter** (`attachChatAdapter`) — подписывает внешний `setChat` на обновления встроенного `ChatStore`. Он **не меняет** политику `isMeaningfulText`. Для изменения политики используйте `chatIsMeaningfulText` или `policyIsMeaningfulText` в пропсах `RealTimeClient`.
 - **ExtendedChatMsg** — объединяет ChatMsg (type='text') и ваши UI-сообщения (type='ui').
 
 ### clearAdded() vs clearChatHistory()
@@ -567,6 +767,27 @@ clearChatHistory(); // Удалит только chatStore сообщения
 ```
 
 **Примечание**: сортировка применяется к объединенному массиву `[...chatStoreMessages, ...addedMessages]` и влияет на порядок отображения в UI.
+
+### Механизм wireChatStore (внутренний)
+
+`wireChatStore(force?: boolean)` — внутренний метод подписки ChatStore на события EventRouter:
+
+- **chatWired** флаг — отслеживает, навешаны ли подписки
+- При `disconnect()` → `EventRouter.cleanup()` → `chatWired = false`
+- При новом `connect()` → автоматический `wireChatStore()` восстанавливает подписки
+- **force=true** — принудительная перевеска (например, при реинициализации)
+
+**Подписки ChatStore:**
+
+- `user:item_started` → `chatStore.startUser(itemId)`
+- `user:delta` → `chatStore.putDelta('user', itemId, delta)`
+- `user:completed` → `chatStore.finalize('user', itemId, 'done', transcript)`
+- `user:failed` / `user:truncated` → `chatStore.finalize('user', itemId, 'done')`
+- `assistant:response_started` → `chatStore.startAssistant(responseId)`
+- `assistant:delta` → `chatStore.putDelta('assistant', responseId, delta)`
+- `assistant:completed` → `chatStore.finalize('assistant', responseId, status)`
+
+**Важно:** История чата сохраняется при reconnect (если `deleteChatHistoryOnDisconnect={false}`), так как подписки восстанавливаются автоматически.
 
 Опции ChatStore:
 
@@ -692,11 +913,95 @@ updateSession({
 
 ### sendToolOutput(call_id, output)
 
-Ручной вывод результата инструмента (если вы не хотите авто-пайплайн через onToolCall):
+Ручной вывод результата инструмента:
 
 ```ts
-client.sendToolOutput(call_id, { ok: true, data: {...} });
-client.sendResponse(); // инициировать последующий ответ
+client.sendToolOutput(call_id, { temperature: 22, city: 'Kyiv' });
+// ВАЖНО: response.create НЕ вызывается автоматически!
+client.sendResponse(); // нужно вызвать вручную
+```
+
+**Что происходит внутри:**
+
+Метод отправляет событие `conversation.item.create` с типом `function_call_output`:
+
+```ts
+sendToolOutput(call_id: string, output: any) {
+  this.sendRaw({
+    type: 'conversation.item.create',
+    item: {
+      type: 'function_call_output',
+      call_id,
+      output: JSON.stringify(output), // output сериализуется в JSON строку
+    },
+  });
+}
+```
+
+**Отличие от onToolCall:**
+
+- **onToolCall** (если вернёте значение) → автоматически отправляет `function_call_output` + делает `response.create`
+- **sendToolOutput** → только отправляет `function_call_output`, `response.create` нужно вызывать вручную
+
+**Когда использовать:**
+
+- **Ручной контроль** — не возвращайте значение в `onToolCall`, слушайте `tool:call_done` и используйте `sendToolOutput` + `sendResponse()`
+- **Автоматический режим** — возвращайте значение в `onToolCall` (библиотека сделает всё сама)
+
+**Пример ручного режима:**
+
+```ts
+<RealTimeClient
+  onToolCall={async ({ name, args, call_id }) => {
+    // Не возвращаем значение — ручной режим
+    const result = await callAPI(name, args);
+    // Библиотека НЕ отправит function_call_output автоматически
+  }}
+/>
+
+// Слушаем tool:call_done и отправляем вручную
+client.on('tool:call_done', async ({ call_id, name, args }) => {
+  const output = await processTool(name, args);
+  client.sendToolOutput(call_id, output);
+  client.sendResponse(); // вручную инициируем ответ
+});
+```
+
+**Пример полного компонента:**
+
+```tsx
+function MyComponent() {
+  const { client } = useRealtime();
+
+  useEffect(() => {
+    if (!client) return;
+
+    // Подписываемся на завершение tool call
+    const unsubscribe = client.on(
+      'tool:call_done',
+      async ({ call_id, name, args }) => {
+        try {
+          // Обрабатываем tool вручную
+          const output = await handleTool(name, args);
+
+          // Отправляем результат
+          client.sendToolOutput(call_id, output);
+
+          // ВАЖНО: вручную инициируем response.create
+          client.sendResponse();
+        } catch (error) {
+          // Обработка ошибок
+          client.sendToolOutput(call_id, { error: error.message });
+          client.sendResponse();
+        }
+      }
+    );
+
+    return unsubscribe;
+  }, [client]);
+
+  return <View>{/* ваш UI */}</View>;
+}
 ```
 
 ---
@@ -714,19 +1019,79 @@ type SessionConfig = {
     threshold?: number;
     prefix_padding_ms?: number;
   };
-  input_audio_transcription?: { model: string; language?: string }; // Whisper-1
+  input_audio_transcription?: { model: string; language?: string }; // Whisper-1 или 'gpt-4o-transcribe'
   tools?: any[]; // Realtime tools spec (проксируется в OpenAI)
   instructions?: string; // системные инструкции
 };
 ```
 
+**Подсказка:** библиотека экспортирует `VOICE_IDS` и тип `VoiceId` — можно строить picker голосов без «ручных» массивов:
+
+```ts
+import { VOICE_IDS, type VoiceId } from 'react-native-openai-realtime';
+
+VOICE_IDS.map(v => /* отрисуйте pill и вызовите updateSession({ voice: v as VoiceId }) */);
+```
+
+**Формат tools:**
+
+```ts
+tools: [
+  {
+    type: 'function',
+    name: 'get_weather',
+    description: 'Return weather by city',
+    parameters: {
+      type: 'object',
+      properties: { city: { type: 'string' } },
+      required: ['city'],
+      additionalProperties: false,
+    },
+  },
+];
+```
+
+### autoSessionUpdate (проп)
+
+**Назначение:** Автоматически отправляет `session.update` при открытии DataChannel.
+
+- **autoSessionUpdate={true}** (по умолчанию) — библиотека отправляет `session.update` сразу после подключения
+- **autoSessionUpdate={false}** — вы управляете сессией вручную через `updateSession()`
+
+**Когда отключать:**
+
+- Динамическая конфигурация сессии (например, выбор модели после подключения)
+- Условное применение настроек (разные tools для разных пользователей)
+- A/B тестирование параметров VAD
+
+**Пример ручного управления:**
+
+```typescript
+<RealTimeClient
+  autoSessionUpdate={false}
+  session={undefined} // не передаём начальную сессию
+  onOpen={async (dc) => {
+    const userPrefs = await fetchUserPreferences();
+    client.updateSession({
+      voice: userPrefs.voice,
+      tools: userPrefs.enabledTools,
+      turn_detection: userPrefs.vadConfig
+    });
+  }}
+/>
+```
+
+**Важно:** Если `autoSessionUpdate={false}`, но `session` передана — она **НЕ** отправится автоматически. Нужно вызвать `updateSession()` вручную.
+
 ### Greet (приветствие)
 
-- **greetEnabled** (true|false)
-- **greetInstructions** — текст
+- **greetEnabled** (по умолчанию `true`) — автоприветствие после подключения
+- **greetInstructions** — текст приветствия
 - **greetModalities** — ['audio','text'] и т.д.
 
-При открытии DataChannel отправляется response.create с указанным приветствием.
+По умолчанию `greetEnabled=true`. При открытии DataChannel отправляется `response.create` с указанным приветствием.
+
+**Важно:** Если `greetEnabled=true`, но `greetInstructions` не заданы, `applyDefaults` подставит дефолтные `instructions` и `modalities` из `DEFAULTS`.
 
 ---
 
@@ -814,6 +1179,26 @@ setContext(
 - Вызывается автоматически после инициализации
 - НЕ предназначен для публичного использования
 
+### EventRouter.cleanup()
+
+**Внутренний метод** очистки подписок EventRouter:
+
+```ts
+cleanup() {
+  this.listeners.clear();
+  this.functionArgsBuffer.clear();
+}
+```
+
+**Назначение:**
+
+- Удаляет все подписки на события (`listeners.clear()`)
+- Очищает буфер аргументов function calls
+- Вызывается автоматически при `disconnect()`
+- После очистки требуется повторная подписка (например, `wireChatStore()`)
+
+**НЕ предназначен для публичного использования** — вызывается автоматически внутри `RealtimeClientClass.disconnect()`.
+
 ### Concurrent Guards (защита от конкурентных вызовов)
 
 Класс защищен от повторных вызовов:
@@ -867,6 +1252,37 @@ type BaseProps = SuccessCallbacks & {
   onSuccess?: (stage: string, data?: any) => void;
 };
 ```
+
+**Приоритет:** Если для стадии указан детализированный коллбек (например, `onDataChannelOpen`), вызываются **оба**: сначала детализированный, затем универсальный `onSuccess`.
+
+### Пример использования универсального onSuccess
+
+```typescript
+const successHandler = new SuccessHandler(
+  {
+    onDataChannelOpen: (dc) => console.log('DC opened:', dc),
+    onPeerConnectionCreated: (pc) => console.log('PC created:', pc),
+  },
+  (stage, data) => {
+    // Универсальный коллбек для всех успешных операций
+    console.log(`[SUCCESS] ${stage}`, data);
+
+    // Можно централизованно обрабатывать все успехи
+    if (stage === 'ice_gathering_complete') {
+      analytics.track('ICE_GATHERING_SUCCESS');
+    }
+
+    if (stage === 'data_channel_open') {
+      // Вызывается после onDataChannelOpen
+      metrics.record('dc_open_time', Date.now() - connectionStartTime);
+    }
+  }
+);
+
+const client = new RealtimeClientClass(options, successHandler);
+```
+
+**Примечание:** Универсальный `onSuccess` вызывается для **всех** успешных операций, даже если для стадии есть детализированный коллбек.
 
 ### ErrorHandler / ErrorEvent
 
@@ -965,6 +1381,28 @@ type ErrorEvent = {
 - В компоненте `RealTimeClient` значение по умолчанию — `true`
 - В классе `RealtimeClientClass` используется `options.deleteChatHistoryOnDisconnect !== false` (т.е. если не указано, считается `true`)
 
+### Особенность deleteChatHistoryOnDisconnect
+
+**Значение по умолчанию зависит от точки входа:**
+
+- **RealTimeClient компонент:** `deleteChatHistoryOnDisconnect = true` (по умолчанию)
+- **RealtimeClientClass:** проверка `!== false` (т.е. если не передано, считается `true`)
+- **DEFAULTS:** поле отсутствует (не применяется через applyDefaults)
+
+**Логика:**
+
+```typescript
+// Компонент (явное значение по умолчанию)
+const { deleteChatHistoryOnDisconnect = true } = props;
+
+// Класс (проверка на !== false)
+if (this.options.deleteChatHistoryOnDisconnect !== false) {
+  chatStore.destroy();
+}
+```
+
+**Итог:** Если хотите сохранять историю — явно передайте `deleteChatHistoryOnDisconnect={false}` в компонент или `{ deleteChatHistoryOnDisconnect: false }` в класс.
+
 **applyDefaults** — глубокое слияние пользовательских опций (deepMerge) с DEFAULTS.
 
 **Особая логика для greet**: если `greet.enabled=true`, но `greet.response.instructions` не задан — подставляется **полный объект** `greet.response` из DEFAULTS (включая `instructions` и `modalities`):
@@ -1053,6 +1491,141 @@ deepMerge({ arr: [1, 2], obj: { a: 1 } }, { arr: [3], obj: { b: 2 } });
 - Компонент `RealTimeClient` автоматически разрывает соединение при переходе приложения в фоновый режим или неактивное состояние.
 - При возврате в приложение нужно вызвать `connect()` заново.
 
+### Аудио-сессия и эхоподавление (InCallManager)
+
+Для голосового общения используйте `react-native-incall-manager`, чтобы система включила AEC (Acoustic Echo Cancellation):
+
+- **iOS**: AVAudioSessionCategoryPlayAndRecord + mode=VoiceChat
+- **Android**: MODE_IN_COMMUNICATION
+
+**⚠️ Важно:** Не переключайте аудио‑сессию через `expo-av` в состоянии `connected` — это может «сбить» AEC и привести к эху («ассистент слышит сам себя»).
+
+**Пример:**
+
+```ts
+import InCallManager from 'react-native-incall-manager';
+
+useEffect(() => {
+  if (status === 'connected') {
+    InCallManager.start({ media: 'audio' });
+    InCallManager.setForceSpeakerphoneOn(true); // маршрут: на динамик (true) или в ухо (false)
+  } else {
+    InCallManager.stop();
+  }
+}, [status]);
+```
+
+**(Опционально)** Глушение микрофона на время речи ассистента:
+
+```ts
+client.on('assistant:response_started', () => {
+  const local = client.getLocalStream?.();
+  local?.getAudioTracks?.()?.forEach((t) => (t.enabled = false));
+});
+client.on('assistant:completed', () => {
+  const local = client.getLocalStream?.();
+  local?.getAudioTracks?.()?.forEach((t) => (t.enabled = true));
+});
+```
+
+### GlobalRealtimeProvider с ref и onToolCall
+
+Пример глобального провайдера, который использует `ref` для добавления UI‑сообщений из `onToolCall`:
+
+```tsx
+import React, { useMemo, useRef } from 'react';
+import {
+  RealTimeClient,
+  type RealTimeClientHandle,
+  createSpeechActivityMiddleware,
+} from 'react-native-openai-realtime';
+
+const SERVER_BASE = 'http://localhost:8787';
+
+const tokenProvider = async () => {
+  const r = await fetch(`${SERVER_BASE}/realtime/session`);
+  const j = await r.json();
+  return j.client_secret.value;
+};
+
+export const GlobalRealtimeProvider: React.FC<{
+  children: React.ReactNode;
+}> = ({ children }) => {
+  const incomingMiddleware = useMemo(
+    () => [createSpeechActivityMiddleware()],
+    []
+  );
+  const rtcRef = useRef<RealTimeClientHandle | null>(null);
+
+  return (
+    <RealTimeClient
+      ref={rtcRef}
+      tokenProvider={tokenProvider}
+      onError={(e) => console.error('Realtime error:', e)}
+      onToolCall={async ({ name, args }) => {
+        try {
+          const isFlights =
+            name === 'search_flights' || name === 'SearchTripByAirplane';
+          const isPros =
+            name === 'search_professionals' || name === 'SearchProfessionals';
+          if (!isFlights && !isPros) return undefined;
+
+          const url = isFlights
+            ? `${SERVER_BASE}/api/search_flights`
+            : `${SERVER_BASE}/api/search`;
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(args ?? {}),
+          });
+          const data = await resp.json();
+
+          rtcRef.current?.addMessage({
+            type: 'ui',
+            role: 'assistant',
+            kind: isFlights ? 'flights' : 'professionals',
+            payload: {
+              total: Number(data?.total ?? 0),
+              items: Array.isArray(data?.items) ? data.items : [],
+            },
+          });
+
+          // Верните результат — библиотека отправит function_call_output и инициирует response.create
+          return data;
+        } catch (e: any) {
+          rtcRef.current?.addMessage({
+            type: 'ui',
+            role: 'assistant',
+            kind: 'error',
+            payload: { error: e?.message || String(e) },
+          });
+          return { error: e?.message || String(e) };
+        }
+      }}
+      session={{
+        model: 'gpt-4o-realtime-preview-2024-12-17',
+        voice: 'shimmer',
+        input_audio_transcription: { model: 'whisper-1' }, // или 'gpt-4o-transcribe'
+        modalities: ['audio', 'text'],
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.7,
+          prefix_padding_ms: 250,
+          silence_duration_ms: 800,
+        },
+      }}
+      incomingMiddleware={incomingMiddleware}
+      chatEnabled
+      chatInverted={false}
+      deleteChatHistoryOnDisconnect={false}
+      autoConnect={false}
+    >
+      {children}
+    </RealTimeClient>
+  );
+};
+```
+
 ---
 
 ## TypeScript Tips
@@ -1129,9 +1702,97 @@ function renderMessage(msg: ExtendedChatMsg) {
 }
 ```
 
+### Типизация ref и использование в onToolCall
+
+```ts
+import { useRef } from 'react';
+import type { RealTimeClientHandle } from 'react-native-openai-realtime';
+
+const rtcRef = useRef<RealTimeClientHandle | null>(null);
+
+<RealTimeClient
+  ref={rtcRef}
+  onToolCall={async ({ name, args }) => {
+    const data = await callYourApi(name, args);
+    rtcRef.current?.addMessage({
+      type: 'ui',
+      kind: 'tool_result',
+      role: 'assistant',
+      payload: data
+    });
+    return data;
+  }}
+/>
+```
+
 ---
 
 ## Troubleshooting / FAQ
+
+### ⚠️ КРИТИЧНО: В чате нет сообщений
+
+**Самая частая проблема — неверная конфигурация сессии!**
+
+**ОБЯЗАТЕЛЬНАЯ конфигурация для работы транскрипции:**
+
+```tsx
+session={{
+  model: 'gpt-4o-realtime-preview-2024-12-17',
+  voice: 'shimmer',
+  modalities: ['audio', 'text'],
+  input_audio_transcription: {
+    model: 'whisper-1' // БЕЗ ЭТОГО НЕ БУДЕТ ТРАНСКРИПЦИИ!
+  },
+  turn_detection: {
+    type: 'server_vad',
+    threshold: 0.7,
+    prefix_padding_ms: 250,
+    silence_duration_ms: 800
+  }
+}}
+```
+
+**Чек‑лист:**
+
+1. ✅ `input_audio_transcription.model` указан (`whisper-1` или `gpt-4o-transcribe`)
+2. ✅ `chatEnabled !== false` (по умолчанию `true`)
+3. ✅ `attachChat !== false` (по умолчанию `true`)
+4. ✅ `greetEnabled` или ручной `sendResponse()` / `sendRaw({ type: 'response.create' })`
+5. ✅ Микрофон работает (проверьте permissions)
+6. ✅ События приходят (смотрите `onEvent` лог)
+7. ✅ Статус соединения `'connected'` (выполните `connect()` или включите `autoConnect={true}`)
+
+**Правильный минимум:**
+
+```tsx
+<RealTimeClient
+  session={{
+    model: 'gpt-4o-realtime-preview-2024-12-17',
+    voice: 'shimmer',
+    input_audio_transcription: { model: 'gpt-4o-transcribe' }, // или 'whisper-1'
+    modalities: ['audio', 'text'],
+    turn_detection: {
+      type: 'server_vad',
+      threshold: 0.7,
+      prefix_padding_ms: 250,
+      silence_duration_ms: 800,
+    },
+  }}
+  autoSessionUpdate={true}
+  greetEnabled={true}
+  // ...
+/>
+```
+
+**Если отключаете server_vad (ручной PTT):**
+
+```ts
+await sendRaw({ type: 'input_audio_buffer.commit' });
+await sendRaw({ type: 'response.create' });
+await sendRaw({ type: 'input_audio_buffer.clear' });
+```
+
+**При ручном чате** (`chatEnabled={false}`) собирайте ленту сами по `client.on('user:*', 'assistant:*')`.
 
 ### DataChannel is not open
 
@@ -1184,6 +1845,15 @@ function renderMessage(msg: ExtendedChatMsg) {
 ## Полный API-справочник
 
 ### RealTimeClientProps (все пропсы)
+
+**Примечание:** Компонент поддерживает `forwardRef`:
+
+```tsx
+const rtcRef = useRef<RealTimeClientHandle>(null);
+<RealTimeClient ref={rtcRef} {...props} />;
+```
+
+Методы ref см. в разделе "Императивный API через ref (RealTimeClientHandle)".
 
 ```ts
 type RealTimeClientProps = {

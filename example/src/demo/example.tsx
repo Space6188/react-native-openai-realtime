@@ -1,3 +1,4 @@
+/* eslint-disable react-native/no-inline-styles */
 import React, {useCallback, useMemo, useRef, useState} from 'react';
 import {SafeAreaView, StatusBar, View, Text, Switch} from 'react-native';
 import {
@@ -245,16 +246,16 @@ export default function App() {
       onAssistantTextDelta={onAssistantTextDelta}
       onAssistantCompleted={onAssistantCompleted}
       onToolCall={onToolCall}
-      onError={e => console.warn('onError:', e)}
+      onError={(e: any) => console.warn('onError:', e)}
       // middleware
       incomingMiddleware={incomingMiddleware}
       outgoingMiddleware={outgoingMiddleware}
       // policy/chat
-      policyIsMeaningfulText={t =>
+      policyIsMeaningfulText={(t: any) =>
         t.replace(/[^\p{L}\p{N}]+/gu, '').trim().length >= 2
       }
       chatEnabled
-      chatIsMeaningfulText={t => !!t.trim()}
+      chatIsMeaningfulText={(t: any) => !!t.trim()}
       chatInverted={chatInverted}
       deleteChatHistoryOnDisconnect={false}
       logger={{
