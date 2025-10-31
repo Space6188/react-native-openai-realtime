@@ -309,11 +309,9 @@ export class RealtimeClientClass {
       this.mediaManager.setupRemoteStream(pc);
 
       // 4) Local media — пробуем взять микрофон; если нет — fallback recvonly
-      let gotLocal = false;
       try {
         const stream = await this.mediaManager.getUserMedia();
         this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
-        gotLocal = true;
       } catch (e: any) {
         this.errorHandler.handle('get_user_media', e, 'warning', true);
         if (this.options.allowConnectWithoutMic !== false) {
