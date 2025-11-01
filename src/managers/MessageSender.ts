@@ -1,3 +1,4 @@
+// src/managers/MessageSender.ts
 import type {
   ResponseCreateParams,
   ResponseCreateStrict,
@@ -50,12 +51,14 @@ export class MessageSender {
       this.errorHandler.handle('data_channel', e, 'warning', true, { event });
     }
   }
+
   sendResponse(): void;
   sendResponse(params: ResponseCreateParams): void;
   sendResponse(params?: any): void {
     const response = params ?? {};
     this.sendRaw({ type: 'response.create', response });
   }
+
   sendResponseStrict(options: ResponseCreateStrict) {
     this.sendRaw({ type: 'response.create', response: options });
   }
@@ -73,5 +76,47 @@ export class MessageSender {
         output: JSON.stringify(output),
       },
     });
+  }
+
+  // ИСПРАВЛЕНО: Правильная отправка текстовых сообщений
+  async sendTextMessage(
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'auto' | 'none';
+    }
+  ): Promise<void> {
+    const msg = (text ?? '').trim();
+    if (!msg) return;
+
+    // 1. Создаем conversation item с текстом пользователя
+    await this.sendRaw({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: msg,
+          },
+        ],
+      },
+    });
+
+    // 2. Создаем response с правильными параметрами
+    const modality = options?.responseModality ?? 'text';
+
+    // ВАЖНО: используем 'auto' вместо 'none' для сохранения контекста
+    const response: ResponseCreateStrict = {
+      instructions:
+        options?.instructions ?? 'Ответь на сообщение пользователя.',
+      modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
+      // По умолчанию 'auto' - добавляет в историю разговора
+      conversation: options?.conversation ?? 'auto',
+    };
+
+    this.sendResponseStrict(response);
   }
 }

@@ -27,6 +27,19 @@ export class DataChannelManager {
 
   create(pc: RTCPeerConnection, onMessage: MessageHandler): RTCDataChannel {
     try {
+      // КРИТИЧНО: Проверяем, что PeerConnection не закрыт
+      if (!pc || pc.connectionState === 'closed') {
+        throw new Error('Cannot create DataChannel: PeerConnection is closed');
+      }
+
+      // Закрываем старый DataChannel если есть
+      if (this.dc) {
+        try {
+          this.dc.close();
+        } catch {}
+        this.dc = null;
+      }
+
       this.onMessage = onMessage;
 
       // @ts-ignore
@@ -68,7 +81,6 @@ export class DataChannelManager {
         try {
           evt = JSON.parse(text);
         } catch (err: any) {
-          // пробрасываем исходную ошибку парсинга + полезный контекст
           this.errorHandler.handle(
             'data_channel',
             err instanceof Error ? err : new Error(String(err)),
@@ -104,25 +116,44 @@ export class DataChannelManager {
   }
 
   private handleOpen() {
+    // КРИТИЧНО: Проверяем готовность перед отправкой команд
+    if (!this.dc || this.dc.readyState !== 'open') {
+      this.options.logger?.warn?.(
+        '[DataChannel] handleOpen called but channel not ready'
+      );
+      return;
+    }
+
     // session.update (auto)
     if (this.options.autoSessionUpdate && this.options.session) {
-      this.send({
-        type: 'session.update',
-        session: this.options.session,
-      });
+      try {
+        this.send({
+          type: 'session.update',
+          session: this.options.session,
+        });
+      } catch (e: any) {
+        this.options.logger?.error?.(
+          '[DataChannel] Failed to send session.update:',
+          e
+        );
+      }
     }
 
     // greet
     if (this.options.greet?.enabled !== false) {
-      const response = {
-        instructions:
-          this.options.greet?.response?.instructions ?? 'Привет! Я на связи.',
-        modalities: this.options.greet?.response?.modalities ?? [
-          'audio',
-          'text',
-        ],
-      };
-      this.send({ type: 'response.create', response });
+      try {
+        const response = {
+          instructions:
+            this.options.greet?.response?.instructions ?? 'Привет! Я на связи.',
+          modalities: this.options.greet?.response?.modalities ?? [
+            'audio',
+            'text',
+          ],
+        };
+        this.send({ type: 'response.create', response });
+      } catch (e: any) {
+        this.options.logger?.error?.('[DataChannel] Failed to send greet:', e);
+      }
     }
 
     this.options.hooks?.onOpen?.(this.dc);

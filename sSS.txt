@@ -113,7 +113,7 @@ import type {
   RealtimeStatus,
   ChatMode,
 } from '@react-native-openai-realtime/types';
-import type { RealtimeClientClass } from '@react-native-openai-realtime/components/RealtimeClientClass';
+import type { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 export type RealtimeContextValue = {
   client: RealtimeClientClass | null;
@@ -126,14 +126,13 @@ export type RealtimeContextValue = {
   sendResponseStrict: (opts: {
     instructions: string;
     modalities?: Array<'audio' | 'text'>;
-    conversation?: 'default' | 'none';
+    conversation?: 'auto' | 'none';
   }) => void;
   updateSession: (patch: Partial<any>) => void;
   sendRaw: (event: any) => void;
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
   clearAdded: () => void;
 
-  // Новые поля для режимов
   mode: ChatMode;
   switchMode: (mode: ChatMode) => Promise<void>;
   sendTextMessage: (
@@ -141,9 +140,10 @@ export type RealtimeContextValue = {
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'default' | 'none';
+      conversation?: 'auto' | 'none';
     }
   ) => Promise<void>;
+  getNextTs: () => number;
 };
 export type ChatAdapterOptions = {
   isMeaningfulText?: (text: string) => boolean;
@@ -200,15 +200,137 @@ export type AddableMessage =
       kind: string;
       payload: any;
     };
+// src/types/Events.ts
+
+/**
+ * Типы всех событий, которые можно слушать через client.on()
+ */
+export type RealtimeEventMap = {
+  // User events (пользовательский ввод)
+  'user:item_started': { itemId: string };
+  'user:delta': { itemId: string; delta: string };
+  'user:completed': { itemId: string; transcript: string };
+  'user:failed': { itemId: string; error?: any };
+  'user:truncated': { itemId: string };
+
+  // Assistant events (ответы ассистента)
+  'assistant:response_started': { responseId: string };
+  'assistant:item_started': { itemId: string };
+  'assistant:delta': {
+    responseId: string;
+    delta: string;
+    channel?: 'audio_transcript' | 'output_text';
+  };
+  'assistant:completed': { responseId: string; status: 'done' | 'canceled' };
+
+  // Tool events (вызовы функций)
+  'tool:call_delta': { call_id: string; name: string; delta: string };
+  'tool:call_done': { call_id: string; name: string; args: any };
+
+  // Speech activity events (определение речи)
+  'speech_started': void;
+  'speech_stopped': void;
+  'timeout_triggered': void;
+
+  // Buffer events (буферы аудио)
+  'input_audio_buffer.committed': any;
+  'input_audio_buffer.cleared': any;
+  'output_audio_buffer.started': any;
+  'output_audio_buffer.stopped': any;
+  'output_audio_buffer.cleared': any;
+
+  // DataChannel events (низкоуровневые)
+  'dataChannelOpen': any;
+  'dataChannelMessage': any;
+  'dataChannelClose': void;
+
+  // Error events
+  'error': { scope: 'tool' | 'server' | string; error: any };
+
+  // Raw server events (любое серверное событие)
+  [key: string]: any;
+};
+
+/**
+ * Типизированный слушатель событий
+ */
+export type RealtimeEventListener<K extends keyof RealtimeEventMap> = (
+  payload: RealtimeEventMap[K]
+) => void;
+
+/**
+ * Коллбэки для всех Success событий (полный список)
+ */
+export interface RealtimeSuccessCallbacks {
+  // Connection lifecycle
+  onHangUpStarted?: () => void;
+  onHangUpDone?: () => void;
+
+  // PeerConnection events
+  onPeerConnectionCreatingStarted?: () => void;
+  onPeerConnectionCreated?: (pc: any) => void;
+  onRTCPeerConnectionStateChange?: (
+    state:
+      | 'new'
+      | 'connecting'
+      | 'connected'
+      | 'disconnected'
+      | 'failed'
+      | 'closed'
+  ) => void;
+
+  // Media events
+  onGetUserMediaSetted?: (stream: any) => void;
+  onLocalStreamSetted?: (stream: any) => void;
+  onLocalStreamAddedTrack?: (track: any) => void;
+  onLocalStreamRemovedTrack?: (track: any) => void;
+  onRemoteStreamSetted?: (stream: any) => void;
+
+  // DataChannel events
+  onDataChannelOpen?: (channel: any) => void;
+  onDataChannelMessage?: (message: any) => void;
+  onDataChannelClose?: () => void;
+
+  // ICE events
+  onIceGatheringComplete?: () => void;
+  onIceGatheringTimeout?: () => void;
+  onIceGatheringStateChange?: (state: string) => void;
+
+  // Permission events
+  onMicrophonePermissionGranted?: () => void;
+  onMicrophonePermissionDenied?: () => void;
+
+  // iOS specific
+  onIOSTransceiverSetted?: () => void;
+
+  // Generic success handler
+  onSuccess?: (stage: string, data?: any) => void;
+}
+
+/**
+ * Коллбэки для Error событий
+ */
+export interface RealtimeErrorCallbacks {
+  onError?: (event: {
+    stage: string;
+    error: Error;
+    severity: 'critical' | 'warning' | 'info';
+    recoverable: boolean;
+    timestamp: number;
+    context?: Record<string, any>;
+  }) => void;
+}
+// src/types/Responce.ts
 export type ResponseCreateParams = {
   instructions: string;
   modalities?: Array<'audio' | 'text'>;
+  conversation?: 'auto' | 'none'; // <-- только 'auto' | 'none'
 };
 
 export type ResponseCreateOptions = {
   instructions?: string;
   modalities?: Array<'audio' | 'text'>;
-  conversation?: 'default' | 'none';
+  conversation?: 'auto' | 'none';
 };
 
 export type ResponseCreateStrict = Omit<
@@ -225,12 +347,15 @@ export * from './ErrorStage';
 export * from './Responce';
 export * from './Speech';
 export * from './SucessCallbacks';
+export * from './Events';
 import type { RTCOfferOptions } from 'react-native-webrtc/lib/typescript/RTCUtil';
 import { VOICE_IDS, VoiceId } from '@react-native-openai-realtime/helpers';
 import type {
   RealtimeContextValue,
   Constraints,
   ChatOptions,
+  RealtimeSuccessCallbacks,
+  RealtimeErrorCallbacks,
 } from '@react-native-openai-realtime/types';
 import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
@@ -251,7 +376,6 @@ export type RTCConfiguration = {
 
 export type TokenProvider = () => Promise<string>;
 
-// Новый тип для режима чата
 export type ChatMode = 'voice' | 'text';
 
 export type SessionConfig = {
@@ -361,70 +485,72 @@ export type RealtimeClientOptionsBeforePrune = {
   };
   chat?: ChatOptions;
   logger?: Logger;
-
-  // НОВОЕ: позволять подключаться без микрофона (fallback recvonly)
-  allowConnectWithoutMic?: boolean; // default: true (если не задано)
-};
-
-// ЕДИНЫЕ ПУБЛИЧНЫЕ ПРОПСЫ
-export type RealTimeClientProps = {
-  // быстрые чат-поведения
-  chatUserAddOnDelta?: boolean;
-  chatInverted?: boolean;
-  deleteChatHistoryOnDisconnect?: boolean;
-  chatUserPlaceholderOnStart?: boolean;
-  chatAssistantAddOnDelta?: boolean;
-  chatAssistantPlaceholderOnStart?: boolean;
-
-  tokenProvider?: TokenProvider;
-
-  webrtc?: {
-    iceServers?: RTCIceServer[];
-    dataChannelLabel?: string;
-    offerOptions?: RTCOfferOptions & { voiceActivityDetection?: boolean };
-    configuration?: RTCConfiguration;
-  };
-
-  media?: { getUserMedia?: Constraints };
-  session?: Partial<SessionConfig>;
-  autoSessionUpdate?: boolean;
-
-  // greet плоско
-  greetEnabled?: boolean;
-  greetInstructions?: string;
-  greetModalities?: Array<'audio' | 'text'>;
-
-  // hooks
-  onOpen?: RealtimeClientHooks['onOpen'];
-  onEvent?: RealtimeClientHooks['onEvent'];
-  onError?: RealtimeClientHooks['onError'];
-  onUserTranscriptionDelta?: RealtimeClientHooks['onUserTranscriptionDelta'];
-  onUserTranscriptionCompleted?: RealtimeClientHooks['onUserTranscriptionCompleted'];
-  onAssistantTextDelta?: RealtimeClientHooks['onAssistantTextDelta'];
-  onAssistantCompleted?: RealtimeClientHooks['onAssistantCompleted'];
-  onToolCall?: RealtimeClientHooks['onToolCall'];
-
-  // middleware
-  incomingMiddleware?: IncomingMiddleware[];
-  outgoingMiddleware?: OutgoingMiddleware[];
-
-  // policy/chat
-  policyIsMeaningfulText?: (text: string) => boolean;
-  chatEnabled?: boolean;
-  chatIsMeaningfulText?: (text: string) => boolean;
-  logger?: Logger;
-  autoConnect?: boolean;
-  attachChat?: boolean;
-
-  // Новые пропсы для режимов
-  initialMode?: ChatMode;
-  onModeChange?: (mode: ChatMode) => void;
-
-  // НОВОЕ: позволять подключаться без микрофона
   allowConnectWithoutMic?: boolean;
-
-  children?: React.ReactNode | ((ctx: RealtimeContextValue) => React.ReactNode);
 };
+
+/**
+ * ОБНОВЛЕНО: Добавлены все Success и Error коллбэки в публичные пропсы
+ */
+export type RealTimeClientProps = RealtimeSuccessCallbacks &
+  RealtimeErrorCallbacks & {
+    // Быстрые чат-поведения
+    chatUserAddOnDelta?: boolean;
+    chatInverted?: boolean;
+    deleteChatHistoryOnDisconnect?: boolean;
+    chatUserPlaceholderOnStart?: boolean;
+    chatAssistantAddOnDelta?: boolean;
+    chatAssistantPlaceholderOnStart?: boolean;
+
+    tokenProvider?: TokenProvider;
+
+    webrtc?: {
+      iceServers?: RTCIceServer[];
+      dataChannelLabel?: string;
+      offerOptions?: RTCOfferOptions & { voiceActivityDetection?: boolean };
+      configuration?: RTCConfiguration;
+    };
+
+    media?: { getUserMedia?: Constraints };
+    session?: Partial<SessionConfig>;
+    autoSessionUpdate?: boolean;
+
+    // Greet настройки
+    greetEnabled?: boolean;
+    greetInstructions?: string;
+    greetModalities?: Array<'audio' | 'text'>;
+
+    // Hooks
+    onOpen?: RealtimeClientHooks['onOpen'];
+    onEvent?: RealtimeClientHooks['onEvent'];
+    // onError уже в RealtimeErrorCallbacks
+    onUserTranscriptionDelta?: RealtimeClientHooks['onUserTranscriptionDelta'];
+    onUserTranscriptionCompleted?: RealtimeClientHooks['onUserTranscriptionCompleted'];
+    onAssistantTextDelta?: RealtimeClientHooks['onAssistantTextDelta'];
+    onAssistantCompleted?: RealtimeClientHooks['onAssistantCompleted'];
+    onToolCall?: RealtimeClientHooks['onToolCall'];
+
+    // Middleware
+    incomingMiddleware?: IncomingMiddleware[];
+    outgoingMiddleware?: OutgoingMiddleware[];
+
+    // Policy/chat
+    policyIsMeaningfulText?: (text: string) => boolean;
+    chatEnabled?: boolean;
+    chatIsMeaningfulText?: (text: string) => boolean;
+    logger?: Logger;
+    autoConnect?: boolean;
+    attachChat?: boolean;
+
+    // Режимы
+    initialMode?: ChatMode;
+    onModeChange?: (mode: ChatMode) => void;
+
+    allowConnectWithoutMic?: boolean;
+
+    children?:
+      | React.ReactNode
+      | ((ctx: RealtimeContextValue) => React.ReactNode);
+  };
 
 export type CoreConfig = Omit<
   RealTimeClientProps,
@@ -450,6 +576,8 @@ export const RealtimeContext = createContext<RealtimeContextValue>({
   mode: 'voice',
   switchMode: async () => {},
   sendTextMessage: async () => {},
+
+  getNextTs: () => Date.now(),
 });
 
 export const RealtimeProvider = RealtimeContext.Provider;
@@ -602,6 +730,7 @@ export const DEFAULTS: RealtimeClientOptionsBeforePrune = {
   },
 };
 export * from './defaultOptions';
+// src/managers/MessageSender.ts
 import type {
   ResponseCreateParams,
   ResponseCreateStrict,
@@ -654,12 +783,14 @@ export class MessageSender {
       this.errorHandler.handle('data_channel', e, 'warning', true, { event });
     }
   }
+
   sendResponse(): void;
   sendResponse(params: ResponseCreateParams): void;
   sendResponse(params?: any): void {
     const response = params ?? {};
     this.sendRaw({ type: 'response.create', response });
   }
+
   sendResponseStrict(options: ResponseCreateStrict) {
     this.sendRaw({ type: 'response.create', response: options });
   }
@@ -677,6 +808,48 @@ export class MessageSender {
         output: JSON.stringify(output),
       },
     });
+  }
+
+  // ИСПРАВЛЕНО: Правильная отправка текстовых сообщений
+  async sendTextMessage(
+    text: string,
+    options?: {
+      responseModality?: 'text' | 'audio';
+      instructions?: string;
+      conversation?: 'auto' | 'none';
+    }
+  ): Promise<void> {
+    const msg = (text ?? '').trim();
+    if (!msg) return;
+
+    // 1. Создаем conversation item с текстом пользователя
+    await this.sendRaw({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: msg,
+          },
+        ],
+      },
+    });
+
+    // 2. Создаем response с правильными параметрами
+    const modality = options?.responseModality ?? 'text';
+
+    // ВАЖНО: используем 'auto' вместо 'none' для сохранения контекста
+    const response: ResponseCreateStrict = {
+      instructions:
+        options?.instructions ?? 'Ответь на сообщение пользователя.',
+      modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
+      // По умолчанию 'auto' - добавляет в историю разговора
+      conversation: options?.conversation ?? 'auto',
+    };
+
+    this.sendResponseStrict(response);
   }
 }
 // core/managers/OpenAIApiClient.ts
@@ -754,6 +927,9 @@ export class MediaManager {
 
   async getUserMedia(): Promise<MediaStream> {
     try {
+      // Сначала останавливаем старый stream если есть
+      this.stopLocalStream();
+
       const constraints = this.options.media?.getUserMedia!;
       const stream = await mediaDevices.getUserMedia(constraints);
       this.localStream = stream;
@@ -767,12 +943,25 @@ export class MediaManager {
   }
 
   addLocalStreamToPeerConnection(pc: RTCPeerConnection, stream: MediaStream) {
+    // КРИТИЧНО: Проверяем, что PeerConnection не закрыт
+    if (!pc || pc.connectionState === 'closed') {
+      const error = new Error('Cannot add tracks: PeerConnection is closed');
+      this.errorHandler.handle('local_stream', error, 'critical', false);
+      throw error;
+    }
+
     stream.getTracks().forEach((track) => {
       try {
+        // Дополнительная проверка перед добавлением каждого трека
+        if (pc.connectionState === 'closed') {
+          throw new Error('PeerConnection closed during track addition');
+        }
+
         pc.addTrack(track, stream);
         this.successHandler.localStreamAddedTrack(track);
       } catch (e: any) {
         this.errorHandler.handle('local_stream', e);
+        throw e; // Пробрасываем ошибку, чтобы прервать connect()
       }
     });
   }
@@ -843,6 +1032,14 @@ export class PeerConnectionManager {
 
   create(): RTCPeerConnection {
     try {
+      // ВАЖНО: Если уже есть pc - закрываем его ПЕРЕД созданием нового
+      if (this.pc) {
+        try {
+          this.pc.close();
+        } catch {}
+        this.pc = null;
+      }
+
       this.successHandler.peerConnectionCreatingStarted();
 
       const pc = new RTCPeerConnection(
@@ -1017,6 +1214,19 @@ export class DataChannelManager {
 
   create(pc: RTCPeerConnection, onMessage: MessageHandler): RTCDataChannel {
     try {
+      // КРИТИЧНО: Проверяем, что PeerConnection не закрыт
+      if (!pc || pc.connectionState === 'closed') {
+        throw new Error('Cannot create DataChannel: PeerConnection is closed');
+      }
+
+      // Закрываем старый DataChannel если есть
+      if (this.dc) {
+        try {
+          this.dc.close();
+        } catch {}
+        this.dc = null;
+      }
+
       this.onMessage = onMessage;
 
       // @ts-ignore
@@ -1058,7 +1268,6 @@ export class DataChannelManager {
         try {
           evt = JSON.parse(text);
         } catch (err: any) {
-          // пробрасываем исходную ошибку парсинга + полезный контекст
           this.errorHandler.handle(
             'data_channel',
             err instanceof Error ? err : new Error(String(err)),
@@ -1094,25 +1303,44 @@ export class DataChannelManager {
   }
 
   private handleOpen() {
+    // КРИТИЧНО: Проверяем готовность перед отправкой команд
+    if (!this.dc || this.dc.readyState !== 'open') {
+      this.options.logger?.warn?.(
+        '[DataChannel] handleOpen called but channel not ready'
+      );
+      return;
+    }
+
     // session.update (auto)
     if (this.options.autoSessionUpdate && this.options.session) {
-      this.send({
-        type: 'session.update',
-        session: this.options.session,
-      });
+      try {
+        this.send({
+          type: 'session.update',
+          session: this.options.session,
+        });
+      } catch (e: any) {
+        this.options.logger?.error?.(
+          '[DataChannel] Failed to send session.update:',
+          e
+        );
+      }
     }
 
     // greet
     if (this.options.greet?.enabled !== false) {
-      const response = {
-        instructions:
-          this.options.greet?.response?.instructions ?? 'Привет! Я на связи.',
-        modalities: this.options.greet?.response?.modalities ?? [
-          'audio',
-          'text',
-        ],
-      };
-      this.send({ type: 'response.create', response });
+      try {
+        const response = {
+          instructions:
+            this.options.greet?.response?.instructions ?? 'Привет! Я на связи.',
+          modalities: this.options.greet?.response?.modalities ?? [
+            'audio',
+            'text',
+          ],
+        };
+        this.send({ type: 'response.create', response });
+      } catch (e: any) {
+        this.options.logger?.error?.('[DataChannel] Failed to send greet:', e);
+      }
     }
 
     this.options.hooks?.onOpen?.(this.dc);
@@ -1683,9 +1911,10 @@ import type {
   ResponseCreateStrict,
   TokenProvider,
   ChatMode,
+  RealtimeEventMap,
+  RealtimeEventListener,
 } from '@react-native-openai-realtime/types';
 
-type Listener = (payload: any) => void;
 type ConnectionState =
   | 'idle'
   | 'connecting'
@@ -1717,6 +1946,9 @@ export class RealtimeClientClass {
   private chatWired = false;
 
   private currentMode: ChatMode = 'voice';
+
+  // Guard для гонок connect/disconnect
+  private connectSeq = 0;
 
   constructor(
     userOptions: RealtimeClientOptionsBeforePrune,
@@ -1916,7 +2148,12 @@ export class RealtimeClientClass {
     this.chatWired = true;
   }
 
-  on(type: string, handler: Listener) {
+  on<K extends keyof RealtimeEventMap>(
+    type: K,
+    handler: RealtimeEventListener<K>
+  ): () => void;
+  on(type: string, handler: (payload: any) => void): () => void;
+  on(type: string, handler: (payload: any) => void): () => void {
     return this.eventRouter.on(type, handler);
   }
 
@@ -1932,6 +2169,19 @@ export class RealtimeClientClass {
     } catch {}
   }
 
+  private makeAbortError() {
+    const err: any = new Error('connect aborted');
+    err.name = 'AbortError';
+    err.__ABORT__ = true;
+    return err;
+  }
+
+  private assertNotAborted(mySeq: number) {
+    if (mySeq !== this.connectSeq || this.disconnecting) {
+      throw this.makeAbortError();
+    }
+  }
+
   async connect() {
     if (this.connecting) {
       this.errorHandler.handle(
@@ -1943,15 +2193,19 @@ export class RealtimeClientClass {
       return;
     }
     this.connecting = true;
+    const mySeq = ++this.connectSeq;
 
     try {
       this.setConnectionState('connecting');
 
+      // Закрываем старое
       this.preConnectCleanup();
 
       if (this.chatStore && !this.chatWired) {
         this.wireChatStore(true);
       }
+
+      this.assertNotAborted(mySeq);
 
       // 1) Token
       let ephemeralKey: string;
@@ -1967,25 +2221,46 @@ export class RealtimeClientClass {
         throw e;
       }
 
+      this.assertNotAborted(mySeq);
+
       // 2) PeerConnection
       const pc = this.peerConnectionManager.create();
+
+      this.assertNotAborted(mySeq);
 
       // 3) Remote stream
       this.mediaManager.setupRemoteStream(pc);
 
-      // 4) Local media — пробуем взять микрофон; если нет — fallback recvonly
-      let gotLocal = false;
+      // 4) Local media — не дергаем мик, если нет аудио-модальности и VAD
+      const wantsAudioModality =
+        Array.isArray(this.options.session?.modalities) &&
+        this.options.session!.modalities!.includes('audio');
+      const wantsTurnDetection = !!this.options.session?.turn_detection;
+      const mustCaptureMic = wantsAudioModality || wantsTurnDetection;
+
       try {
-        const stream = await this.mediaManager.getUserMedia();
-        this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
-        gotLocal = true;
+        if (mustCaptureMic || this.options.allowConnectWithoutMic === false) {
+          const stream = await this.mediaManager.getUserMedia();
+          this.assertNotAborted(mySeq);
+          this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
+        } else {
+          // текстовый режим: можно добавить recvonly
+          try {
+            // @ts-ignore
+            if (typeof (pc as any).addTransceiver === 'function') {
+              // @ts-ignore
+              (pc as any).addTransceiver('audio', { direction: 'recvonly' });
+              this.successHandler.iosTransceiverSetted?.();
+            }
+          } catch (e2: any) {
+            this.errorHandler.handle('ios_transceiver', e2, 'info', true);
+          }
+        }
       } catch (e: any) {
-        this.errorHandler.handle('get_user_media', e, 'warning', true);
         if (this.options.allowConnectWithoutMic !== false) {
           try {
             // @ts-ignore
             if (typeof (pc as any).addTransceiver === 'function') {
-              // audio recvonly — получать звук ассистента без локального микрофона
               // @ts-ignore
               (pc as any).addTransceiver('audio', { direction: 'recvonly' });
               this.successHandler.iosTransceiverSetted?.();
@@ -2001,10 +2276,11 @@ export class RealtimeClientClass {
             this.errorHandler.handle('ios_transceiver', e2, 'warning', true);
           }
         } else {
-          // если явно запретили fallback — пробрасываем ошибку
           throw e;
         }
       }
+
+      this.assertNotAborted(mySeq);
 
       // 5) DataChannel
       this.dataChannelManager.create(pc, async (evt) => {
@@ -2018,15 +2294,23 @@ export class RealtimeClientClass {
       // 7) ICE
       await this.peerConnectionManager.waitForIceGathering();
 
+      this.assertNotAborted(mySeq);
+
       // 8) SDP exchange
       const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
       await this.peerConnectionManager.setRemoteDescription(answer);
     } catch (e: any) {
-      if (this.getStatus() !== 'error') {
-        this.setConnectionState('error');
-        this.errorHandler.handle('init_peer_connection', e);
+      if (e?.__ABORT__ || e?.name === 'AbortError') {
+        if (this.getStatus() !== 'disconnected') {
+          this.setConnectionState('disconnected');
+        }
+      } else {
+        if (this.getStatus() !== 'error') {
+          this.setConnectionState('error');
+          this.errorHandler.handle('init_peer_connection', e);
+        }
+        throw e;
       }
-      throw e;
     } finally {
       this.connecting = false;
     }
@@ -2035,6 +2319,9 @@ export class RealtimeClientClass {
   async disconnect() {
     if (this.disconnecting) return;
     this.disconnecting = true;
+
+    // инвалидируем текущий connect
+    this.connectSeq++;
 
     try {
       this.successHandler.hangUpStarted();
@@ -2103,13 +2390,12 @@ export class RealtimeClientClass {
     this.messageSender.sendToolOutput(call_id, output);
   }
 
-  // Текст
   public async sendTextMessage(
     text: string,
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'default' | 'none';
+      conversation?: 'auto' | 'none';
     }
   ): Promise<void> {
     const msg = (text ?? '').trim();
@@ -2129,12 +2415,14 @@ export class RealtimeClientClass {
       options?.responseModality ??
       (this.currentMode === 'text' ? 'text' : 'audio');
 
-    this.sendResponseStrict({
+    const response: ResponseCreateStrict = {
       instructions:
         options?.instructions ?? 'Ответь на сообщение пользователя.',
       modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
-      conversation: options?.conversation ?? 'default',
-    });
+      conversation: options?.conversation ?? 'auto',
+    };
+
+    this.sendResponseStrict(response);
   }
 
   getPeerConnection() {
@@ -2202,6 +2490,10 @@ import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 import { attachChatAdapter } from '@react-native-openai-realtime/adapters';
 import { RealtimeProvider } from '@react-native-openai-realtime/context';
 import { prune } from '@react-native-openai-realtime/helpers';
+import {
+  SuccessHandler,
+  ErrorHandler,
+} from '@react-native-openai-realtime/handlers';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -2223,7 +2515,7 @@ export type RealTimeClientHandle = {
   sendResponseStrict: (opts: {
     instructions: string;
     modalities?: Array<'audio' | 'text'>;
-    conversation?: 'default' | 'none';
+    conversation?: 'auto' | 'none';
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
@@ -2234,7 +2526,7 @@ export type RealTimeClientHandle = {
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'default' | 'none';
+      conversation?: 'auto' | 'none';
     }
   ) => Promise<void>;
 
@@ -2281,15 +2573,38 @@ export const RealTimeClient = forwardRef<
     chatAssistantAddOnDelta,
     chatAssistantPlaceholderOnStart,
 
-    // Новые пропсы
     initialMode = 'voice',
     onModeChange,
     allowConnectWithoutMic = true,
+
+    // Success callbacks
+    onHangUpStarted,
+    onHangUpDone,
+    onPeerConnectionCreatingStarted,
+    onPeerConnectionCreated,
+    onRTCPeerConnectionStateChange,
+    onGetUserMediaSetted,
+    onLocalStreamSetted,
+    onLocalStreamAddedTrack,
+    onLocalStreamRemovedTrack,
+    onRemoteStreamSetted,
+    onDataChannelOpen,
+    onDataChannelMessage,
+    onDataChannelClose,
+    onIceGatheringComplete,
+    onIceGatheringTimeout,
+    onIceGatheringStateChange,
+    onMicrophonePermissionGranted,
+    onMicrophonePermissionDenied,
+    onIOSTransceiverSetted,
+    onSuccess,
   } = props;
 
   const clientRef = useRef<RealtimeClientClass | null>(null);
   const connectionUnsubRef = useRef<(() => void) | null>(null);
   const detachChatRef = useRef<null | (() => void)>(null);
+  const mountedRef = useRef(false);
+  const connectCalledRef = useRef(false);
 
   const [status, setStatus] = useState<
     'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
@@ -2341,8 +2656,6 @@ export const RealTimeClient = forwardRef<
         assistantPlaceholderOnStart: chatAssistantPlaceholderOnStart,
       }),
       logger,
-
-      // НОВОЕ: пробрасываем флаг в ядро
       allowConnectWithoutMic,
     }) as CoreConfig;
   }, [
@@ -2379,8 +2692,37 @@ export const RealTimeClient = forwardRef<
 
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
+      const successHandler = new SuccessHandler(
+        {
+          onHangUpStarted,
+          onHangUpDone,
+          onPeerConnectionCreatingStarted,
+          onPeerConnectionCreated,
+          onRTCPeerConnectionStateChange,
+          onGetUserMediaSetted,
+          onLocalStreamSetted,
+          onLocalStreamAddedTrack,
+          onLocalStreamRemovedTrack,
+          onRemoteStreamSetted,
+          onDataChannelOpen,
+          onDataChannelMessage,
+          onDataChannelClose,
+          onIceGatheringComplete,
+          onIceGatheringTimeout,
+          onIceGatheringStateChange,
+          onMicrophonePermissionGranted,
+          onMicrophonePermissionDenied,
+          onIOSTransceiverSetted,
+        },
+        onSuccess
+      );
+
+      const errorHandler = new ErrorHandler(onError, { error: logger?.error });
+
       clientRef.current = new RealtimeClientClass(
-        optionsSnapshot as RealtimeClientOptionsBeforePrune
+        optionsSnapshot as RealtimeClientOptionsBeforePrune,
+        successHandler,
+        errorHandler
       );
 
       setStatus(clientRef.current.getConnectionState());
@@ -2396,7 +2738,32 @@ export const RealTimeClient = forwardRef<
       }
     }
     return clientRef.current!;
-  }, [optionsSnapshot, tokenProvider]);
+  }, [
+    optionsSnapshot,
+    tokenProvider,
+    onHangUpStarted,
+    onHangUpDone,
+    onPeerConnectionCreatingStarted,
+    onPeerConnectionCreated,
+    onRTCPeerConnectionStateChange,
+    onGetUserMediaSetted,
+    onLocalStreamSetted,
+    onLocalStreamAddedTrack,
+    onLocalStreamRemovedTrack,
+    onRemoteStreamSetted,
+    onDataChannelOpen,
+    onDataChannelMessage,
+    onDataChannelClose,
+    onIceGatheringComplete,
+    onIceGatheringTimeout,
+    onIceGatheringStateChange,
+    onMicrophonePermissionGranted,
+    onMicrophonePermissionDenied,
+    onIOSTransceiverSetted,
+    onSuccess,
+    onError,
+    logger,
+  ]);
 
   useEffect(() => {
     if (clientRef.current && tokenProvider) {
@@ -2406,9 +2773,10 @@ export const RealTimeClient = forwardRef<
     }
   }, [tokenProvider]);
 
+  // ВАЖНО: отключаем disconnect() на 'inactive'
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
-      if (state === 'background' || state === 'inactive') {
+      if (state === 'background') {
         clientRef.current?.disconnect().catch(() => {});
       }
     };
@@ -2451,10 +2819,27 @@ export const RealTimeClient = forwardRef<
     }
   }, [deleteChatHistoryOnDisconnect]);
 
+  // Защита от многократного autoConnect
   useEffect(() => {
-    if (!autoConnect) return;
-    connect().catch(() => {});
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      connectCalledRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!autoConnect || !mountedRef.current || connectCalledRef.current) return;
+
+    connectCalledRef.current = true;
+    const t = setTimeout(() => {
+      if (mountedRef.current) {
+        connect().catch(() => {});
+      }
+    }, 50);
+
+    return () => {
+      clearTimeout(t);
       disconnect().catch(() => {});
     };
   }, [autoConnect, connect, disconnect]);
@@ -2561,7 +2946,7 @@ export const RealTimeClient = forwardRef<
       options?: {
         responseModality?: 'text' | 'audio';
         instructions?: string;
-        conversation?: 'default' | 'none';
+        conversation?: 'auto' | 'none';
       }
     ) => {
       await clientRef.current?.sendTextMessage(text, options);
@@ -2581,7 +2966,7 @@ export const RealTimeClient = forwardRef<
       sendResponseStrict: (opts: {
         instructions: string;
         modalities?: Array<'audio' | 'text'>;
-        conversation?: 'default' | 'none';
+        conversation?: 'auto' | 'none';
       }) => clientRef.current?.sendResponseStrict(opts),
       updateSession: (patch: Partial<any>) =>
         clientRef.current?.updateSession(patch),
@@ -2592,6 +2977,7 @@ export const RealTimeClient = forwardRef<
       mode,
       switchMode,
       sendTextMessage,
+      getNextTs,
     }),
     [
       status,
@@ -2604,6 +2990,7 @@ export const RealTimeClient = forwardRef<
       mode,
       switchMode,
       sendTextMessage,
+      getNextTs,
     ]
   );
 
@@ -3050,6 +3437,7 @@ export const VOICE_IDS = [
 ] as const;
 
 export type VoiceId = (typeof VOICE_IDS)[number];
+// src/helpers/createDefaultRouter.ts
 import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
 
 type Emitter = (type: string, payload?: any) => void;
@@ -3064,7 +3452,6 @@ function extractInputTextFromItem(item: any): string | null {
       if (c.type === 'input_text' && typeof c.text === 'string') {
         return c.text;
       }
-      // На всякий случай: альтернативный формат
       if (c.type === 'text' && typeof c.text === 'string') {
         return c.text;
       }
@@ -3085,18 +3472,27 @@ export function createDefaultRouter(
     const hooks = options.hooks;
     hooks?.onEvent?.(msg);
 
-    // Пользовательский item создан
-    if (msg.type === 'conversation.item.created' && msg.item?.role === 'user') {
-      const itemId = msg.item.id;
-      if (itemId) {
+    // ИСПРАВЛЕНО: Обработка создания пользовательского item
+    if (msg.type === 'conversation.item.created') {
+      const item = msg.item;
+      const itemId = item?.id;
+
+      // User item
+      if (item?.role === 'user' && itemId) {
         emit('user:item_started', { itemId });
+
+        // Если это текстовый ввод - сразу завершаем
+        const typed = extractInputTextFromItem(item);
+        if (typed && String(typed).trim()) {
+          emit('user:completed', { itemId, transcript: String(typed) });
+        }
       }
 
-      // Если это typed-ввод (input_text) — сразу завершаем как готовое сообщение
-      const typed = extractInputTextFromItem(msg.item);
-      if (itemId && typed && String(typed).trim()) {
-        emit('user:completed', { itemId, transcript: String(typed) });
+      // Assistant item (для совместимости)
+      if (item?.role === 'assistant' && itemId) {
+        emit('assistant:item_started', { itemId });
       }
+
       return;
     }
 
@@ -3105,6 +3501,56 @@ export function createDefaultRouter(
       const responseId = msg.response?.id || msg.response_id;
       if (responseId) {
         emit('assistant:response_started', { responseId });
+      }
+      return;
+    }
+
+    // ИСПРАВЛЕНО: Обработка текстовых дельт от ассистента
+    // Для текстового режима приходят события response.text.delta
+    if (msg.type === 'response.text.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'output_text',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
+      }
+      return;
+    }
+
+    // Для голосового режима - audio transcript
+    if (msg.type === 'response.audio_transcript.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'audio_transcript',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', {
+          responseId,
+          delta,
+          channel: 'audio_transcript',
+        });
+      }
+      return;
+    }
+
+    // ДОБАВЛЕНО: Обработка response.output_text.delta (альтернативный формат)
+    if (msg.type === 'response.output_text.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'output_text',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
       }
       return;
     }
@@ -3145,41 +3591,21 @@ export function createDefaultRouter(
       return;
     }
 
-    // Дельты ассистента
-    if (msg.type === 'response.audio_transcript.delta') {
+    // ИСПРАВЛЕНО: Завершение текстового ответа
+    if (msg.type === 'response.text.done') {
       const responseId = msg.response_id;
-      const delta = msg.delta || '';
-      const consumed = hooks?.onAssistantTextDelta?.({
+      const consumed = hooks?.onAssistantCompleted?.({
         responseId,
-        delta,
-        channel: 'audio_transcript',
+        status: 'done',
       });
       if (consumed !== 'consume') {
-        emit('assistant:delta', {
-          responseId,
-          delta,
-          channel: 'audio_transcript',
-        });
-      }
-      return;
-    }
-
-    if (msg.type === 'response.output_text.delta') {
-      const responseId = msg.response_id;
-      const delta = msg.delta || '';
-      const consumed = hooks?.onAssistantTextDelta?.({
-        responseId,
-        delta,
-        channel: 'output_text',
-      });
-      if (consumed !== 'consume') {
-        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
+        emit('assistant:completed', { responseId, status: 'done' });
       }
       return;
     }
 
     // Завершение/отмена ответа ассистента
-    if (msg.type === 'response.completed') {
+    if (msg.type === 'response.done' || msg.type === 'response.completed') {
       const responseId = msg.response_id || msg.response?.id;
       const consumed = hooks?.onAssistantCompleted?.({
         responseId,
@@ -3191,7 +3617,7 @@ export function createDefaultRouter(
       return;
     }
 
-    if (msg.type === 'response.canceled') {
+    if (msg.type === 'response.cancelled' || msg.type === 'response.canceled') {
       const responseId = msg.response_id || msg.response?.id;
       const consumed = hooks?.onAssistantCompleted?.({
         responseId,
@@ -3275,6 +3701,22 @@ export function createDefaultRouter(
       emit('error', { scope: 'server', error: msg.error });
       options.hooks?.onError?.(msg.error);
       return;
+    }
+
+    // ДОБАВЛЕНО: Логирование необработанных событий для отладки
+    if (options.logger?.debug) {
+      const knownTypes = [
+        'session.created',
+        'session.updated',
+        'input_audio_buffer.committed',
+        'input_audio_buffer.cleared',
+        'input_audio_buffer.speech_started',
+        'input_audio_buffer.speech_stopped',
+        'rate_limits.updated',
+      ];
+      if (!knownTypes.includes(msg.type)) {
+        options.logger.debug(`[Router] Unhandled event: ${msg.type}`, msg);
+      }
     }
   };
 }

@@ -18,9 +18,10 @@ import type {
   ResponseCreateStrict,
   TokenProvider,
   ChatMode,
+  RealtimeEventMap,
+  RealtimeEventListener,
 } from '@react-native-openai-realtime/types';
 
-type Listener = (payload: any) => void;
 type ConnectionState =
   | 'idle'
   | 'connecting'
@@ -52,6 +53,9 @@ export class RealtimeClientClass {
   private chatWired = false;
 
   private currentMode: ChatMode = 'voice';
+
+  // Guard для гонок connect/disconnect
+  private connectSeq = 0;
 
   constructor(
     userOptions: RealtimeClientOptionsBeforePrune,
@@ -251,7 +255,12 @@ export class RealtimeClientClass {
     this.chatWired = true;
   }
 
-  on(type: string, handler: Listener) {
+  on<K extends keyof RealtimeEventMap>(
+    type: K,
+    handler: RealtimeEventListener<K>
+  ): () => void;
+  on(type: string, handler: (payload: any) => void): () => void;
+  on(type: string, handler: (payload: any) => void): () => void {
     return this.eventRouter.on(type, handler);
   }
 
@@ -267,6 +276,19 @@ export class RealtimeClientClass {
     } catch {}
   }
 
+  private makeAbortError() {
+    const err: any = new Error('connect aborted');
+    err.name = 'AbortError';
+    err.__ABORT__ = true;
+    return err;
+  }
+
+  private assertNotAborted(mySeq: number) {
+    if (mySeq !== this.connectSeq || this.disconnecting) {
+      throw this.makeAbortError();
+    }
+  }
+
   async connect() {
     if (this.connecting) {
       this.errorHandler.handle(
@@ -278,15 +300,19 @@ export class RealtimeClientClass {
       return;
     }
     this.connecting = true;
+    const mySeq = ++this.connectSeq;
 
     try {
       this.setConnectionState('connecting');
 
+      // Закрываем старое
       this.preConnectCleanup();
 
       if (this.chatStore && !this.chatWired) {
         this.wireChatStore(true);
       }
+
+      this.assertNotAborted(mySeq);
 
       // 1) Token
       let ephemeralKey: string;
@@ -302,23 +328,46 @@ export class RealtimeClientClass {
         throw e;
       }
 
+      this.assertNotAborted(mySeq);
+
       // 2) PeerConnection
       const pc = this.peerConnectionManager.create();
+
+      this.assertNotAborted(mySeq);
 
       // 3) Remote stream
       this.mediaManager.setupRemoteStream(pc);
 
-      // 4) Local media — пробуем взять микрофон; если нет — fallback recvonly
+      // 4) Local media — не дергаем мик, если нет аудио-модальности и VAD
+      const wantsAudioModality =
+        Array.isArray(this.options.session?.modalities) &&
+        this.options.session!.modalities!.includes('audio');
+      const wantsTurnDetection = !!this.options.session?.turn_detection;
+      const mustCaptureMic = wantsAudioModality || wantsTurnDetection;
+
       try {
-        const stream = await this.mediaManager.getUserMedia();
-        this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
+        if (mustCaptureMic || this.options.allowConnectWithoutMic === false) {
+          const stream = await this.mediaManager.getUserMedia();
+          this.assertNotAborted(mySeq);
+          this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
+        } else {
+          // текстовый режим: можно добавить recvonly
+          try {
+            // @ts-ignore
+            if (typeof (pc as any).addTransceiver === 'function') {
+              // @ts-ignore
+              (pc as any).addTransceiver('audio', { direction: 'recvonly' });
+              this.successHandler.iosTransceiverSetted?.();
+            }
+          } catch (e2: any) {
+            this.errorHandler.handle('ios_transceiver', e2, 'info', true);
+          }
+        }
       } catch (e: any) {
-        this.errorHandler.handle('get_user_media', e, 'warning', true);
         if (this.options.allowConnectWithoutMic !== false) {
           try {
             // @ts-ignore
             if (typeof (pc as any).addTransceiver === 'function') {
-              // audio recvonly — получать звук ассистента без локального микрофона
               // @ts-ignore
               (pc as any).addTransceiver('audio', { direction: 'recvonly' });
               this.successHandler.iosTransceiverSetted?.();
@@ -334,10 +383,11 @@ export class RealtimeClientClass {
             this.errorHandler.handle('ios_transceiver', e2, 'warning', true);
           }
         } else {
-          // если явно запретили fallback — пробрасываем ошибку
           throw e;
         }
       }
+
+      this.assertNotAborted(mySeq);
 
       // 5) DataChannel
       this.dataChannelManager.create(pc, async (evt) => {
@@ -351,15 +401,23 @@ export class RealtimeClientClass {
       // 7) ICE
       await this.peerConnectionManager.waitForIceGathering();
 
+      this.assertNotAborted(mySeq);
+
       // 8) SDP exchange
       const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
       await this.peerConnectionManager.setRemoteDescription(answer);
     } catch (e: any) {
-      if (this.getStatus() !== 'error') {
-        this.setConnectionState('error');
-        this.errorHandler.handle('init_peer_connection', e);
+      if (e?.__ABORT__ || e?.name === 'AbortError') {
+        if (this.getStatus() !== 'disconnected') {
+          this.setConnectionState('disconnected');
+        }
+      } else {
+        if (this.getStatus() !== 'error') {
+          this.setConnectionState('error');
+          this.errorHandler.handle('init_peer_connection', e);
+        }
+        throw e;
       }
-      throw e;
     } finally {
       this.connecting = false;
     }
@@ -368,6 +426,9 @@ export class RealtimeClientClass {
   async disconnect() {
     if (this.disconnecting) return;
     this.disconnecting = true;
+
+    // инвалидируем текущий connect
+    this.connectSeq++;
 
     try {
       this.successHandler.hangUpStarted();
@@ -436,13 +497,12 @@ export class RealtimeClientClass {
     this.messageSender.sendToolOutput(call_id, output);
   }
 
-  // Текст
   public async sendTextMessage(
     text: string,
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'auto' | 'none'; // <-- тут
+      conversation?: 'auto' | 'none';
     }
   ): Promise<void> {
     const msg = (text ?? '').trim();
@@ -466,7 +526,6 @@ export class RealtimeClientClass {
       instructions:
         options?.instructions ?? 'Ответь на сообщение пользователя.',
       modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
-      // Если явно передали conversation — используем его, иначе 'auto'
       conversation: options?.conversation ?? 'auto',
     };
 

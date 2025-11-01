@@ -23,6 +23,10 @@ import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 import { attachChatAdapter } from '@react-native-openai-realtime/adapters';
 import { RealtimeProvider } from '@react-native-openai-realtime/context';
 import { prune } from '@react-native-openai-realtime/helpers';
+import {
+  SuccessHandler,
+  ErrorHandler,
+} from '@react-native-openai-realtime/handlers';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -44,7 +48,7 @@ export type RealTimeClientHandle = {
   sendResponseStrict: (opts: {
     instructions: string;
     modalities?: Array<'audio' | 'text'>;
-    conversation?: 'auto' | 'none'; // <-- тут
+    conversation?: 'auto' | 'none';
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
@@ -55,7 +59,7 @@ export type RealTimeClientHandle = {
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'auto' | 'none'; // <-- тут
+      conversation?: 'auto' | 'none';
     }
   ) => Promise<void>;
 
@@ -105,11 +109,35 @@ export const RealTimeClient = forwardRef<
     initialMode = 'voice',
     onModeChange,
     allowConnectWithoutMic = true,
+
+    // Success callbacks
+    onHangUpStarted,
+    onHangUpDone,
+    onPeerConnectionCreatingStarted,
+    onPeerConnectionCreated,
+    onRTCPeerConnectionStateChange,
+    onGetUserMediaSetted,
+    onLocalStreamSetted,
+    onLocalStreamAddedTrack,
+    onLocalStreamRemovedTrack,
+    onRemoteStreamSetted,
+    onDataChannelOpen,
+    onDataChannelMessage,
+    onDataChannelClose,
+    onIceGatheringComplete,
+    onIceGatheringTimeout,
+    onIceGatheringStateChange,
+    onMicrophonePermissionGranted,
+    onMicrophonePermissionDenied,
+    onIOSTransceiverSetted,
+    onSuccess,
   } = props;
 
   const clientRef = useRef<RealtimeClientClass | null>(null);
   const connectionUnsubRef = useRef<(() => void) | null>(null);
   const detachChatRef = useRef<null | (() => void)>(null);
+  const mountedRef = useRef(false);
+  const connectCalledRef = useRef(false);
 
   const [status, setStatus] = useState<
     'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
@@ -197,8 +225,37 @@ export const RealTimeClient = forwardRef<
 
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
+      const successHandler = new SuccessHandler(
+        {
+          onHangUpStarted,
+          onHangUpDone,
+          onPeerConnectionCreatingStarted,
+          onPeerConnectionCreated,
+          onRTCPeerConnectionStateChange,
+          onGetUserMediaSetted,
+          onLocalStreamSetted,
+          onLocalStreamAddedTrack,
+          onLocalStreamRemovedTrack,
+          onRemoteStreamSetted,
+          onDataChannelOpen,
+          onDataChannelMessage,
+          onDataChannelClose,
+          onIceGatheringComplete,
+          onIceGatheringTimeout,
+          onIceGatheringStateChange,
+          onMicrophonePermissionGranted,
+          onMicrophonePermissionDenied,
+          onIOSTransceiverSetted,
+        },
+        onSuccess
+      );
+
+      const errorHandler = new ErrorHandler(onError, { error: logger?.error });
+
       clientRef.current = new RealtimeClientClass(
-        optionsSnapshot as RealtimeClientOptionsBeforePrune
+        optionsSnapshot as RealtimeClientOptionsBeforePrune,
+        successHandler,
+        errorHandler
       );
 
       setStatus(clientRef.current.getConnectionState());
@@ -214,7 +271,32 @@ export const RealTimeClient = forwardRef<
       }
     }
     return clientRef.current!;
-  }, [optionsSnapshot, tokenProvider]);
+  }, [
+    optionsSnapshot,
+    tokenProvider,
+    onHangUpStarted,
+    onHangUpDone,
+    onPeerConnectionCreatingStarted,
+    onPeerConnectionCreated,
+    onRTCPeerConnectionStateChange,
+    onGetUserMediaSetted,
+    onLocalStreamSetted,
+    onLocalStreamAddedTrack,
+    onLocalStreamRemovedTrack,
+    onRemoteStreamSetted,
+    onDataChannelOpen,
+    onDataChannelMessage,
+    onDataChannelClose,
+    onIceGatheringComplete,
+    onIceGatheringTimeout,
+    onIceGatheringStateChange,
+    onMicrophonePermissionGranted,
+    onMicrophonePermissionDenied,
+    onIOSTransceiverSetted,
+    onSuccess,
+    onError,
+    logger,
+  ]);
 
   useEffect(() => {
     if (clientRef.current && tokenProvider) {
@@ -224,9 +306,10 @@ export const RealTimeClient = forwardRef<
     }
   }, [tokenProvider]);
 
+  // ВАЖНО: отключаем disconnect() на 'inactive'
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
-      if (state === 'background' || state === 'inactive') {
+      if (state === 'background') {
         clientRef.current?.disconnect().catch(() => {});
       }
     };
@@ -269,10 +352,27 @@ export const RealTimeClient = forwardRef<
     }
   }, [deleteChatHistoryOnDisconnect]);
 
+  // Защита от многократного autoConnect
   useEffect(() => {
-    if (!autoConnect) return;
-    connect().catch(() => {});
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      connectCalledRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!autoConnect || !mountedRef.current || connectCalledRef.current) return;
+
+    connectCalledRef.current = true;
+    const t = setTimeout(() => {
+      if (mountedRef.current) {
+        connect().catch(() => {});
+      }
+    }, 50);
+
+    return () => {
+      clearTimeout(t);
       disconnect().catch(() => {});
     };
   }, [autoConnect, connect, disconnect]);
@@ -379,7 +479,7 @@ export const RealTimeClient = forwardRef<
       options?: {
         responseModality?: 'text' | 'audio';
         instructions?: string;
-        conversation?: 'auto' | 'none'; // <-- тут
+        conversation?: 'auto' | 'none';
       }
     ) => {
       await clientRef.current?.sendTextMessage(text, options);
@@ -399,7 +499,7 @@ export const RealTimeClient = forwardRef<
       sendResponseStrict: (opts: {
         instructions: string;
         modalities?: Array<'audio' | 'text'>;
-        conversation?: 'auto' | 'none'; // <-- тут
+        conversation?: 'auto' | 'none';
       }) => clientRef.current?.sendResponseStrict(opts),
       updateSession: (patch: Partial<any>) =>
         clientRef.current?.updateSession(patch),

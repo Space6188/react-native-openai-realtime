@@ -3,7 +3,7 @@ import type {
   RealtimeStatus,
   ChatMode,
 } from '@react-native-openai-realtime/types';
-import type { RealtimeClientClass } from '@react-native-openai-realtime/components/RealtimeClientClass';
+import type { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 export type RealtimeContextValue = {
   client: RealtimeClientClass | null;
@@ -16,7 +16,7 @@ export type RealtimeContextValue = {
   sendResponseStrict: (opts: {
     instructions: string;
     modalities?: Array<'audio' | 'text'>;
-    conversation?: 'auto' | 'none'; // <-- тут
+    conversation?: 'auto' | 'none';
   }) => void;
   updateSession: (patch: Partial<any>) => void;
   sendRaw: (event: any) => void;
@@ -30,7 +30,7 @@ export type RealtimeContextValue = {
     options?: {
       responseModality?: 'text' | 'audio';
       instructions?: string;
-      conversation?: 'auto' | 'none'; // <-- тут
+      conversation?: 'auto' | 'none';
     }
   ) => Promise<void>;
   getNextTs: () => number;

@@ -1,3 +1,4 @@
+// src/helpers/createDefaultRouter.ts
 import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
 
 type Emitter = (type: string, payload?: any) => void;
@@ -12,7 +13,6 @@ function extractInputTextFromItem(item: any): string | null {
       if (c.type === 'input_text' && typeof c.text === 'string') {
         return c.text;
       }
-      // На всякий случай: альтернативный формат
       if (c.type === 'text' && typeof c.text === 'string') {
         return c.text;
       }
@@ -33,18 +33,27 @@ export function createDefaultRouter(
     const hooks = options.hooks;
     hooks?.onEvent?.(msg);
 
-    // Пользовательский item создан
-    if (msg.type === 'conversation.item.created' && msg.item?.role === 'user') {
-      const itemId = msg.item.id;
-      if (itemId) {
+    // ИСПРАВЛЕНО: Обработка создания пользовательского item
+    if (msg.type === 'conversation.item.created') {
+      const item = msg.item;
+      const itemId = item?.id;
+
+      // User item
+      if (item?.role === 'user' && itemId) {
         emit('user:item_started', { itemId });
+
+        // Если это текстовый ввод - сразу завершаем
+        const typed = extractInputTextFromItem(item);
+        if (typed && String(typed).trim()) {
+          emit('user:completed', { itemId, transcript: String(typed) });
+        }
       }
 
-      // Если это typed-ввод (input_text) — сразу завершаем как готовое сообщение
-      const typed = extractInputTextFromItem(msg.item);
-      if (itemId && typed && String(typed).trim()) {
-        emit('user:completed', { itemId, transcript: String(typed) });
+      // Assistant item (для совместимости)
+      if (item?.role === 'assistant' && itemId) {
+        emit('assistant:item_started', { itemId });
       }
+
       return;
     }
 
@@ -53,6 +62,56 @@ export function createDefaultRouter(
       const responseId = msg.response?.id || msg.response_id;
       if (responseId) {
         emit('assistant:response_started', { responseId });
+      }
+      return;
+    }
+
+    // ИСПРАВЛЕНО: Обработка текстовых дельт от ассистента
+    // Для текстового режима приходят события response.text.delta
+    if (msg.type === 'response.text.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'output_text',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
+      }
+      return;
+    }
+
+    // Для голосового режима - audio transcript
+    if (msg.type === 'response.audio_transcript.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'audio_transcript',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', {
+          responseId,
+          delta,
+          channel: 'audio_transcript',
+        });
+      }
+      return;
+    }
+
+    // ДОБАВЛЕНО: Обработка response.output_text.delta (альтернативный формат)
+    if (msg.type === 'response.output_text.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'output_text',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
       }
       return;
     }
@@ -93,41 +152,21 @@ export function createDefaultRouter(
       return;
     }
 
-    // Дельты ассистента
-    if (msg.type === 'response.audio_transcript.delta') {
+    // ИСПРАВЛЕНО: Завершение текстового ответа
+    if (msg.type === 'response.text.done') {
       const responseId = msg.response_id;
-      const delta = msg.delta || '';
-      const consumed = hooks?.onAssistantTextDelta?.({
+      const consumed = hooks?.onAssistantCompleted?.({
         responseId,
-        delta,
-        channel: 'audio_transcript',
+        status: 'done',
       });
       if (consumed !== 'consume') {
-        emit('assistant:delta', {
-          responseId,
-          delta,
-          channel: 'audio_transcript',
-        });
-      }
-      return;
-    }
-
-    if (msg.type === 'response.output_text.delta') {
-      const responseId = msg.response_id;
-      const delta = msg.delta || '';
-      const consumed = hooks?.onAssistantTextDelta?.({
-        responseId,
-        delta,
-        channel: 'output_text',
-      });
-      if (consumed !== 'consume') {
-        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
+        emit('assistant:completed', { responseId, status: 'done' });
       }
       return;
     }
 
     // Завершение/отмена ответа ассистента
-    if (msg.type === 'response.completed') {
+    if (msg.type === 'response.done' || msg.type === 'response.completed') {
       const responseId = msg.response_id || msg.response?.id;
       const consumed = hooks?.onAssistantCompleted?.({
         responseId,
@@ -139,7 +178,7 @@ export function createDefaultRouter(
       return;
     }
 
-    if (msg.type === 'response.canceled') {
+    if (msg.type === 'response.cancelled' || msg.type === 'response.canceled') {
       const responseId = msg.response_id || msg.response?.id;
       const consumed = hooks?.onAssistantCompleted?.({
         responseId,
@@ -223,6 +262,22 @@ export function createDefaultRouter(
       emit('error', { scope: 'server', error: msg.error });
       options.hooks?.onError?.(msg.error);
       return;
+    }
+
+    // ДОБАВЛЕНО: Логирование необработанных событий для отладки
+    if (options.logger?.debug) {
+      const knownTypes = [
+        'session.created',
+        'session.updated',
+        'input_audio_buffer.committed',
+        'input_audio_buffer.cleared',
+        'input_audio_buffer.speech_started',
+        'input_audio_buffer.speech_stopped',
+        'rate_limits.updated',
+      ];
+      if (!knownTypes.includes(msg.type)) {
+        options.logger.debug(`[Router] Unhandled event: ${msg.type}`, msg);
+      }
     }
   };
 }

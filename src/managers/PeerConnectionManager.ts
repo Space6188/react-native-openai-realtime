@@ -23,6 +23,14 @@ export class PeerConnectionManager {
 
   create(): RTCPeerConnection {
     try {
+      // ВАЖНО: Если уже есть pc - закрываем его ПЕРЕД созданием нового
+      if (this.pc) {
+        try {
+          this.pc.close();
+        } catch {}
+        this.pc = null;
+      }
+
       this.successHandler.peerConnectionCreatingStarted();
 
       const pc = new RTCPeerConnection(

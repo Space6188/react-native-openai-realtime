@@ -4,6 +4,8 @@ import type {
   RealtimeContextValue,
   Constraints,
   ChatOptions,
+  RealtimeSuccessCallbacks,
+  RealtimeErrorCallbacks,
 } from '@react-native-openai-realtime/types';
 import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
@@ -24,7 +26,6 @@ export type RTCConfiguration = {
 
 export type TokenProvider = () => Promise<string>;
 
-// Новый тип для режима чата
 export type ChatMode = 'voice' | 'text';
 
 export type SessionConfig = {
@@ -134,70 +135,72 @@ export type RealtimeClientOptionsBeforePrune = {
   };
   chat?: ChatOptions;
   logger?: Logger;
-
-  // НОВОЕ: позволять подключаться без микрофона (fallback recvonly)
-  allowConnectWithoutMic?: boolean; // default: true (если не задано)
-};
-
-// ЕДИНЫЕ ПУБЛИЧНЫЕ ПРОПСЫ
-export type RealTimeClientProps = {
-  // быстрые чат-поведения
-  chatUserAddOnDelta?: boolean;
-  chatInverted?: boolean;
-  deleteChatHistoryOnDisconnect?: boolean;
-  chatUserPlaceholderOnStart?: boolean;
-  chatAssistantAddOnDelta?: boolean;
-  chatAssistantPlaceholderOnStart?: boolean;
-
-  tokenProvider?: TokenProvider;
-
-  webrtc?: {
-    iceServers?: RTCIceServer[];
-    dataChannelLabel?: string;
-    offerOptions?: RTCOfferOptions & { voiceActivityDetection?: boolean };
-    configuration?: RTCConfiguration;
-  };
-
-  media?: { getUserMedia?: Constraints };
-  session?: Partial<SessionConfig>;
-  autoSessionUpdate?: boolean;
-
-  // greet плоско
-  greetEnabled?: boolean;
-  greetInstructions?: string;
-  greetModalities?: Array<'audio' | 'text'>;
-
-  // hooks
-  onOpen?: RealtimeClientHooks['onOpen'];
-  onEvent?: RealtimeClientHooks['onEvent'];
-  onError?: RealtimeClientHooks['onError'];
-  onUserTranscriptionDelta?: RealtimeClientHooks['onUserTranscriptionDelta'];
-  onUserTranscriptionCompleted?: RealtimeClientHooks['onUserTranscriptionCompleted'];
-  onAssistantTextDelta?: RealtimeClientHooks['onAssistantTextDelta'];
-  onAssistantCompleted?: RealtimeClientHooks['onAssistantCompleted'];
-  onToolCall?: RealtimeClientHooks['onToolCall'];
-
-  // middleware
-  incomingMiddleware?: IncomingMiddleware[];
-  outgoingMiddleware?: OutgoingMiddleware[];
-
-  // policy/chat
-  policyIsMeaningfulText?: (text: string) => boolean;
-  chatEnabled?: boolean;
-  chatIsMeaningfulText?: (text: string) => boolean;
-  logger?: Logger;
-  autoConnect?: boolean;
-  attachChat?: boolean;
-
-  // Новые пропсы для режимов
-  initialMode?: ChatMode;
-  onModeChange?: (mode: ChatMode) => void;
-
-  // НОВОЕ: позволять подключаться без микрофона
   allowConnectWithoutMic?: boolean;
-
-  children?: React.ReactNode | ((ctx: RealtimeContextValue) => React.ReactNode);
 };
+
+/**
+ * ОБНОВЛЕНО: Добавлены все Success и Error коллбэки в публичные пропсы
+ */
+export type RealTimeClientProps = RealtimeSuccessCallbacks &
+  RealtimeErrorCallbacks & {
+    // Быстрые чат-поведения
+    chatUserAddOnDelta?: boolean;
+    chatInverted?: boolean;
+    deleteChatHistoryOnDisconnect?: boolean;
+    chatUserPlaceholderOnStart?: boolean;
+    chatAssistantAddOnDelta?: boolean;
+    chatAssistantPlaceholderOnStart?: boolean;
+
+    tokenProvider?: TokenProvider;
+
+    webrtc?: {
+      iceServers?: RTCIceServer[];
+      dataChannelLabel?: string;
+      offerOptions?: RTCOfferOptions & { voiceActivityDetection?: boolean };
+      configuration?: RTCConfiguration;
+    };
+
+    media?: { getUserMedia?: Constraints };
+    session?: Partial<SessionConfig>;
+    autoSessionUpdate?: boolean;
+
+    // Greet настройки
+    greetEnabled?: boolean;
+    greetInstructions?: string;
+    greetModalities?: Array<'audio' | 'text'>;
+
+    // Hooks
+    onOpen?: RealtimeClientHooks['onOpen'];
+    onEvent?: RealtimeClientHooks['onEvent'];
+    // onError уже в RealtimeErrorCallbacks
+    onUserTranscriptionDelta?: RealtimeClientHooks['onUserTranscriptionDelta'];
+    onUserTranscriptionCompleted?: RealtimeClientHooks['onUserTranscriptionCompleted'];
+    onAssistantTextDelta?: RealtimeClientHooks['onAssistantTextDelta'];
+    onAssistantCompleted?: RealtimeClientHooks['onAssistantCompleted'];
+    onToolCall?: RealtimeClientHooks['onToolCall'];
+
+    // Middleware
+    incomingMiddleware?: IncomingMiddleware[];
+    outgoingMiddleware?: OutgoingMiddleware[];
+
+    // Policy/chat
+    policyIsMeaningfulText?: (text: string) => boolean;
+    chatEnabled?: boolean;
+    chatIsMeaningfulText?: (text: string) => boolean;
+    logger?: Logger;
+    autoConnect?: boolean;
+    attachChat?: boolean;
+
+    // Режимы
+    initialMode?: ChatMode;
+    onModeChange?: (mode: ChatMode) => void;
+
+    allowConnectWithoutMic?: boolean;
+
+    children?:
+      | React.ReactNode
+      | ((ctx: RealtimeContextValue) => React.ReactNode);
+  };
 
 export type CoreConfig = Omit<
   RealTimeClientProps,

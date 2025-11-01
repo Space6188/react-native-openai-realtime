@@ -26,6 +26,9 @@ export class MediaManager {
 
   async getUserMedia(): Promise<MediaStream> {
     try {
+      // Сначала останавливаем старый stream если есть
+      this.stopLocalStream();
+
       const constraints = this.options.media?.getUserMedia!;
       const stream = await mediaDevices.getUserMedia(constraints);
       this.localStream = stream;
@@ -39,12 +42,25 @@ export class MediaManager {
   }
 
   addLocalStreamToPeerConnection(pc: RTCPeerConnection, stream: MediaStream) {
+    // КРИТИЧНО: Проверяем, что PeerConnection не закрыт
+    if (!pc || pc.connectionState === 'closed') {
+      const error = new Error('Cannot add tracks: PeerConnection is closed');
+      this.errorHandler.handle('local_stream', error, 'critical', false);
+      throw error;
+    }
+
     stream.getTracks().forEach((track) => {
       try {
+        // Дополнительная проверка перед добавлением каждого трека
+        if (pc.connectionState === 'closed') {
+          throw new Error('PeerConnection closed during track addition');
+        }
+
         pc.addTrack(track, stream);
         this.successHandler.localStreamAddedTrack(track);
       } catch (e: any) {
         this.errorHandler.handle('local_stream', e);
+        throw e; // Пробрасываем ошибку, чтобы прервать connect()
       }
     });
   }
