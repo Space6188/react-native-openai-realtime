@@ -1,6 +1,6 @@
 {
   "name": "react-native-openai-realtime",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Easy-to-use React Native library for integrating OpenAI Realtime API voice conversations",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/index.d.ts",
