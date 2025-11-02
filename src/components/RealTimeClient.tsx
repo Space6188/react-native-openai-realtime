@@ -7,7 +7,6 @@ import {
   RealTimeClientProps,
   RealtimeContextValue,
   TokenProvider,
-  ChatMode,
 } from '@react-native-openai-realtime/types';
 import {
   useCallback,
@@ -52,17 +51,6 @@ export type RealTimeClientHandle = {
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
-  getMode: () => 'voice' | 'text';
-  switchMode: (mode: 'voice' | 'text') => Promise<void>;
-  sendTextMessage: (
-    text: string,
-    options?: {
-      responseModality?: 'text' | 'audio';
-      instructions?: string;
-      conversation?: 'auto' | 'none';
-    }
-  ) => Promise<void>;
-
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
   clearAdded: () => void;
   clearChatHistory: () => void;
@@ -106,8 +94,6 @@ export const RealTimeClient = forwardRef<
     chatAssistantAddOnDelta,
     chatAssistantPlaceholderOnStart,
 
-    initialMode = 'voice',
-    onModeChange,
     allowConnectWithoutMic = true,
 
     // Success callbacks
@@ -142,7 +128,6 @@ export const RealTimeClient = forwardRef<
   const [status, setStatus] = useState<
     'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
   >('idle');
-  const [mode, setMode] = useState<'voice' | 'text'>(initialMode);
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [addedMessages, setAddedMessages] = useState<ExtendedChatMsg[]>([]);
 
@@ -225,27 +210,51 @@ export const RealTimeClient = forwardRef<
 
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
+      // Комбинированный SuccessHandler: и обновляем status локально, и зовем ваши колбеки
       const successHandler = new SuccessHandler(
         {
-          onHangUpStarted,
-          onHangUpDone,
-          onPeerConnectionCreatingStarted,
-          onPeerConnectionCreated,
-          onRTCPeerConnectionStateChange,
+          onPeerConnectionCreatingStarted: () => {
+            setStatus('connecting');
+            onPeerConnectionCreatingStarted?.();
+          },
+          onPeerConnectionCreated: (pc) => {
+            onPeerConnectionCreated?.(pc);
+          },
+          onRTCPeerConnectionStateChange: (state) => {
+            // локально синхронизируем статус
+            if (state === 'connected') setStatus('connected');
+            else if (state === 'connecting' || state === 'new')
+              setStatus('connecting');
+            else if (state === 'failed') setStatus('error');
+            else if (state === 'disconnected' || state === 'closed')
+              setStatus('disconnected');
+
+            onRTCPeerConnectionStateChange?.(state);
+          },
+          onDataChannelOpen: (channel) => {
+            setStatus('connected');
+            onDataChannelOpen?.(channel);
+          },
+          onDataChannelClose: () => {
+            setStatus('disconnected');
+            onDataChannelClose?.();
+          },
+
+          // остальное — просто прокидываем
           onGetUserMediaSetted,
           onLocalStreamSetted,
           onLocalStreamAddedTrack,
           onLocalStreamRemovedTrack,
           onRemoteStreamSetted,
-          onDataChannelOpen,
-          onDataChannelMessage,
-          onDataChannelClose,
           onIceGatheringComplete,
           onIceGatheringTimeout,
           onIceGatheringStateChange,
           onMicrophonePermissionGranted,
           onMicrophonePermissionDenied,
           onIOSTransceiverSetted,
+          onHangUpStarted,
+          onHangUpDone,
+          onDataChannelMessage,
         },
         onSuccess
       );
@@ -306,7 +315,7 @@ export const RealTimeClient = forwardRef<
     }
   }, [tokenProvider]);
 
-  // ВАЖНО: отключаем disconnect() на 'inactive'
+  // Отключаем disconnect() на 'background'
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background') {
@@ -376,23 +385,6 @@ export const RealTimeClient = forwardRef<
       disconnect().catch(() => {});
     };
   }, [autoConnect, connect, disconnect]);
-
-  useEffect(() => {
-    if (status === 'connected' && clientRef.current) {
-      if (initialMode === 'text') {
-        clientRef.current
-          .switchMode('text')
-          .then(() => {
-            setMode('text');
-            onModeChange?.('text');
-          })
-          .catch(() => {});
-      } else {
-        setMode('voice');
-        onModeChange?.('voice');
-      }
-    }
-  }, [status, initialMode, onModeChange]);
 
   const getNextTs = useCallback((): number => {
     try {
@@ -464,29 +456,6 @@ export const RealTimeClient = forwardRef<
     clientRef.current?.clearChatHistory();
   }, []);
 
-  const switchMode = useCallback(
-    async (newMode: ChatMode) => {
-      await clientRef.current?.switchMode(newMode);
-      setMode(newMode);
-      onModeChange?.(newMode);
-    },
-    [onModeChange]
-  );
-
-  const sendTextMessage = useCallback(
-    async (
-      text: string,
-      options?: {
-        responseModality?: 'text' | 'audio';
-        instructions?: string;
-        conversation?: 'auto' | 'none';
-      }
-    ) => {
-      await clientRef.current?.sendTextMessage(text, options);
-    },
-    []
-  );
-
   const value: RealtimeContextValue = useMemo(
     () => ({
       client: clientRef.current,
@@ -506,10 +475,6 @@ export const RealTimeClient = forwardRef<
       sendRaw: (e: any) => clientRef.current?.sendRaw(e),
       addMessage,
       clearAdded,
-
-      mode,
-      switchMode,
-      sendTextMessage,
       getNextTs,
     }),
     [
@@ -520,9 +485,6 @@ export const RealTimeClient = forwardRef<
       addMessage,
       clearAdded,
       clearChatHistory,
-      mode,
-      switchMode,
-      sendTextMessage,
       getNextTs,
     ]
   );
@@ -548,10 +510,6 @@ export const RealTimeClient = forwardRef<
       sendResponseStrict: (opts) => clientRef.current?.sendResponseStrict(opts),
       updateSession: (patch) => clientRef.current?.updateSession(patch),
 
-      getMode: () => clientRef.current?.getMode() ?? mode,
-      switchMode,
-      sendTextMessage,
-
       addMessage,
       clearAdded,
       clearChatHistory,
@@ -565,9 +523,6 @@ export const RealTimeClient = forwardRef<
       clearAdded,
       clearChatHistory,
       getNextTs,
-      mode,
-      switchMode,
-      sendTextMessage,
     ]
   );
 

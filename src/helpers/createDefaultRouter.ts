@@ -33,7 +33,7 @@ export function createDefaultRouter(
     const hooks = options.hooks;
     hooks?.onEvent?.(msg);
 
-    // ИСПРАВЛЕНО: Обработка создания пользовательского item
+    // ✅ ИСПРАВЛЕНО: Обработка создания пользовательского item
     if (msg.type === 'conversation.item.created') {
       const item = msg.item;
       const itemId = item?.id;
@@ -66,9 +66,23 @@ export function createDefaultRouter(
       return;
     }
 
-    // ИСПРАВЛЕНО: Обработка текстовых дельт от ассистента
-    // Для текстового режима приходят события response.text.delta
+    // ✅ ИСПРАВЛЕНО: Обработка ВСЕХ типов текстовых дельт от ассистента
     if (msg.type === 'response.text.delta') {
+      const responseId = msg.response_id;
+      const delta = msg.delta || '';
+      const consumed = hooks?.onAssistantTextDelta?.({
+        responseId,
+        delta,
+        channel: 'output_text',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:delta', { responseId, delta, channel: 'output_text' });
+      }
+      return;
+    }
+
+    // ✅ ДОБАВЛЕНО: response.output_item.text.delta
+    if (msg.type === 'response.output_item.text.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
       const consumed = hooks?.onAssistantTextDelta?.({
@@ -101,7 +115,7 @@ export function createDefaultRouter(
       return;
     }
 
-    // ДОБАВЛЕНО: Обработка response.output_text.delta (альтернативный формат)
+    // ✅ ДОБАВЛЕНО: response.output_text.delta (альтернативный формат)
     if (msg.type === 'response.output_text.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
@@ -152,8 +166,21 @@ export function createDefaultRouter(
       return;
     }
 
-    // ИСПРАВЛЕНО: Завершение текстового ответа
+    // ✅ ИСПРАВЛЕНО: Завершение текстового ответа
     if (msg.type === 'response.text.done') {
+      const responseId = msg.response_id;
+      const consumed = hooks?.onAssistantCompleted?.({
+        responseId,
+        status: 'done',
+      });
+      if (consumed !== 'consume') {
+        emit('assistant:completed', { responseId, status: 'done' });
+      }
+      return;
+    }
+
+    // ✅ ДОБАВЛЕНО: response.output_item.text.done
+    if (msg.type === 'response.output_item.text.done') {
       const responseId = msg.response_id;
       const consumed = hooks?.onAssistantCompleted?.({
         responseId,
@@ -258,13 +285,15 @@ export function createDefaultRouter(
       return;
     }
 
+    // ✅ ИСПРАВЛЕНО: Обработка серверных ошибок
     if (msg.type === 'error') {
       emit('error', { scope: 'server', error: msg.error });
-      options.hooks?.onError?.(msg.error);
+      // НЕ вызываем hooks.onError с серверной ошибкой - это вызовет проблемы
+      // hooks?.onError?.(msg.error);
       return;
     }
 
-    // ДОБАВЛЕНО: Логирование необработанных событий для отладки
+    // ✅ ДОБАВЛЕНО: Логирование необработанных событий для отладки
     if (options.logger?.debug) {
       const knownTypes = [
         'session.created',
@@ -273,6 +302,9 @@ export function createDefaultRouter(
         'input_audio_buffer.cleared',
         'input_audio_buffer.speech_started',
         'input_audio_buffer.speech_stopped',
+        'output_audio_buffer.started',
+        'output_audio_buffer.stopped',
+        'output_audio_buffer.cleared',
         'rate_limits.updated',
       ];
       if (!knownTypes.includes(msg.type)) {

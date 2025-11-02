@@ -17,7 +17,6 @@ import type {
   ResponseCreateParams,
   ResponseCreateStrict,
   TokenProvider,
-  ChatMode,
   RealtimeEventMap,
   RealtimeEventListener,
 } from '@react-native-openai-realtime/types';
@@ -51,8 +50,6 @@ export class RealtimeClientClass {
 
   private chatStore?: ChatStore;
   private chatWired = false;
-
-  private currentMode: ChatMode = 'voice';
 
   // Guard для гонок connect/disconnect
   private connectSeq = 0;
@@ -146,54 +143,6 @@ export class RealtimeClientClass {
           this.options.chat?.assistantPlaceholderOnStart,
       });
       this.wireChatStore();
-    }
-  }
-
-  public getMode(): ChatMode {
-    return this.currentMode;
-  }
-
-  public async switchMode(mode: ChatMode): Promise<void> {
-    try {
-      if (!this.isConnected()) {
-        throw new Error('switchMode: not connected');
-      }
-      if (this.currentMode === mode) {
-        this.options.logger?.debug?.(
-          `[RealtimeClient] Already in ${mode} mode`
-        );
-        return;
-      }
-
-      const local = this.mediaManager.getLocalStream?.();
-      if (local && typeof local.getAudioTracks === 'function') {
-        local.getAudioTracks().forEach((t: any) => {
-          t.enabled = mode === 'voice';
-        });
-      }
-
-      const patch: any = {};
-      if (mode === 'voice') {
-        const td = this.options.session?.turn_detection ?? {
-          type: 'server_vad',
-          threshold: 0.5,
-          silence_duration_ms: 700,
-          prefix_padding_ms: 300,
-        };
-        patch.turn_detection = td;
-      } else {
-        patch.turn_detection = undefined;
-      }
-
-      await this.sendRaw({ type: 'session.update', session: patch });
-
-      this.currentMode = mode;
-      this.options.logger?.info?.(`[RealtimeClient] Mode -> ${mode}`);
-    } catch (e: any) {
-      this.errorHandler.handle('init_peer_connection', e, 'warning', true, {
-        mode,
-      });
-      throw e;
     }
   }
 
@@ -475,6 +424,10 @@ export class RealtimeClientClass {
     }
   }
 
+  // ========================================
+  // НИЗКОУРОВНЕВЫЕ МЕТОДЫ (без проверок)
+  // ========================================
+
   async sendRaw(event: any): Promise<void> {
     return this.messageSender.sendRaw(event);
   }
@@ -497,40 +450,9 @@ export class RealtimeClientClass {
     this.messageSender.sendToolOutput(call_id, output);
   }
 
-  public async sendTextMessage(
-    text: string,
-    options?: {
-      responseModality?: 'text' | 'audio';
-      instructions?: string;
-      conversation?: 'auto' | 'none';
-    }
-  ): Promise<void> {
-    const msg = (text ?? '').trim();
-    if (!msg) return;
-    if (!this.isConnected()) throw new Error('Not connected');
-
-    await this.sendRaw({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: msg }],
-      },
-    });
-
-    const modality =
-      options?.responseModality ??
-      (this.currentMode === 'text' ? 'text' : 'audio');
-
-    const response: ResponseCreateStrict = {
-      instructions:
-        options?.instructions ?? 'Ответь на сообщение пользователя.',
-      modalities: modality === 'text' ? ['text'] : ['audio', 'text'],
-      conversation: options?.conversation ?? 'auto',
-    };
-
-    this.sendResponseStrict(response);
-  }
+  // ========================================
+  // ГЕТТЕРЫ
+  // ========================================
 
   getPeerConnection() {
     return this.peerConnectionManager.getPeerConnection();

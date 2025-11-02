@@ -72,68 +72,57 @@ class SpeechActivityStore {
 export const speechActivityStore = new SpeechActivityStore();
 export type SpeechActivityStoreType = typeof speechActivityStore;
 // Утилита: безопасное сравнение типа события
-const isType = (evt: any, type: string) => evt?.type === type;
 
-// Middleware: обновляет store по событиям
 export function createSpeechActivityMiddleware(store = speechActivityStore) {
   return ({ event }: MiddlewareCtx) => {
     const t = event?.type;
 
-    if (
-      isType(event, 'input_audio_buffer.speech_started') ||
-      t === 'speech_started'
-    ) {
+    // Пользователь (как было)
+    if (t === 'input_audio_buffer.speech_started' || t === 'speech_started') {
       store.setUserSpeaking(true);
       store.setAssistantSpeaking(false);
     }
-    if (
-      isType(event, 'input_audio_buffer.speech_stopped') ||
-      t === 'speech_stopped'
-    ) {
+    if (t === 'input_audio_buffer.speech_stopped' || t === 'speech_stopped') {
       store.setUserSpeaking(false);
       store.setInputBuffered(false);
     }
     if (
-      isType(event, 'input_audio_buffer.timeout_triggered') ||
-      t === 'timeout_triggered'
+      t === 'input_audio_buffer.committed' ||
+      t === 'input_audio_buffer.commit'
     ) {
-      store.setUserSpeaking(false);
-      store.setInputBuffered(false);
-    }
-    if (
-      isType(event, 'input_audio_buffer.committed') ||
-      isType(event, 'input_audio_buffer.commit')
-    ) {
-      // Коммит входного буфера: идёт речь/данные — активируем
       store.setInputBuffered(true);
       store.setUserSpeaking(true);
     }
     if (
-      isType(event, 'input_audio_buffer.cleared') ||
-      isType(event, 'input_audio_buffer.clear')
+      t === 'input_audio_buffer.cleared' ||
+      t === 'input_audio_buffer.clear'
     ) {
       store.setInputBuffered(false);
-      // Отключать speaking по cleared можно не всегда; оставим управление через speech_stopped/timeout
     }
 
-    // Ассистент (выход)
-    if (isType(event, 'output_audio_buffer.started')) {
+    // Ассистент (патч)
+    if (t === 'output_audio_buffer.started') {
       store.setOutputBuffered(true);
       store.setAssistantSpeaking(true);
       store.setInputBuffered(false);
       store.setUserSpeaking(false);
     }
-    if (isType(event, 'output_audio_buffer.stopped')) {
+    // Патч: на .stopped и .cleared выключаем ассистентскую речь
+    if (
+      t === 'output_audio_buffer.stopped' ||
+      t === 'output_audio_buffer.cleared'
+    ) {
       store.setAssistantSpeaking(false);
-    }
-    if (isType(event, 'output_audio_buffer.cleared')) {
       store.setOutputBuffered(false);
-      // Говорить ассистент перестаёт обычно по .stopped; cleared — финальный сброс буфера
     }
 
-    // ничего не блокируем
+    // Патч: на ответ отменён — тоже гасим
+    if (t === 'response.canceled' || t === 'response.cancelled') {
+      store.setAssistantSpeaking(false);
+      store.setOutputBuffered(false);
+    }
+
     return;
   };
 }
-
 // React-хук: подписка на store
