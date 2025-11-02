@@ -29,7 +29,8 @@
     "clean": "del-cli lib",
     "release": "release-it --only-version",
     "prepare": "bob build && tsc-alias -p tsconfig.alias.json --outDir lib/typescript",
-    "fix-aliases": "node ./scripts/fix-aliases.js"
+    "fix-aliases": "node ./scripts/fix-aliases.js",
+    "build:full": "npm run clean && npm run lint && npm run typecheck && npm run prepare && npm run fix-aliases && npm run test"
   },
   "keywords": [
     "react-native",
