@@ -102,6 +102,7 @@ export const useSessionOptions = ({
         },
       });
       await delay(300);
+      await clientRef.current?.enableMicrophone?.();
       await switchModeRef.current('voice');
       setRemoteTracksEnabled(true);
       await delay(400);

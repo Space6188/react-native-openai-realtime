@@ -1,4 +1,6 @@
-// core/managers/MediaManager.ts
+// В файле: MediaManager.ts
+// Замените класс целиком:
+
 import { mediaDevices, MediaStream } from 'react-native-webrtc';
 import type { RTCPeerConnection } from 'react-native-webrtc';
 import type { RealtimeClientOptionsBeforePrune } from '@react-native-openai-realtime/types';
@@ -24,21 +26,17 @@ export class MediaManager {
     this.successHandler = successHandler;
   }
 
+  // ✅ ИСПРАВЛЕНО: Не вызываем errorHandler внутри
   async getUserMedia(): Promise<MediaStream> {
-    try {
-      // Сначала останавливаем старый stream если есть
-      this.stopLocalStream();
+    // Сначала останавливаем старый stream если есть
+    this.stopLocalStream();
 
-      const constraints = this.options.media?.getUserMedia!;
-      const stream = await mediaDevices.getUserMedia(constraints);
-      this.localStream = stream;
-      this.successHandler.getUserMediaSetted(stream);
-      this.successHandler.localStreamSetted(stream);
-      return stream;
-    } catch (e: any) {
-      this.errorHandler.handle('get_user_media', e);
-      throw e;
-    }
+    const constraints = this.options.media?.getUserMedia!;
+    const stream = await mediaDevices.getUserMedia(constraints);
+    this.localStream = stream;
+    this.successHandler.getUserMediaSetted(stream);
+    this.successHandler.localStreamSetted(stream);
+    return stream;
   }
 
   addLocalStreamToPeerConnection(pc: RTCPeerConnection, stream: MediaStream) {

@@ -1,4 +1,6 @@
-// src/handlers/error.ts
+// Файл: handlers/error.ts
+// Проверьте что у вас ИМЕННО так:
+
 import type {
   ErrorEvent,
   ErrorStage,
@@ -39,9 +41,12 @@ export class ErrorHandler {
       context
     );
 
+    // ✅ ВАЖНО: Вызываем onError только ПОСЛЕ логирования
+    // onError НЕ должен менять connectionState если severity !== 'critical'
     if (this.onError) {
       this.onError(errorEvent);
     }
+
     return errorEvent;
   }
 }

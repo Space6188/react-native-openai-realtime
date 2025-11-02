@@ -238,6 +238,51 @@ export class RealtimeClientClass {
     }
   }
 
+  // В RealtimeClientClass.ts
+  async enableMicrophone() {
+    try {
+      const pc = this.peerConnectionManager.getPeerConnection();
+      if (!pc) throw new Error('PeerConnection not created');
+
+      const stream = await this.mediaManager.getUserMedia(); // дергает mediaDevices.getUserMedia
+      this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
+      try {
+        const txs = (pc as any).getTransceivers?.() || [];
+        const audioTx = txs.find(
+          (t: any) =>
+            t?.receiver?.track?.kind === 'audio' ||
+            t?.sender?.track?.kind === 'audio'
+        );
+        const track = stream.getAudioTracks?.()[0];
+        if (audioTx?.sender && track) {
+          await audioTx.sender.replaceTrack(track);
+          if (typeof audioTx.setDirection === 'function') {
+            audioTx.setDirection('sendrecv');
+          } else {
+            // @ts-ignore
+            audioTx.direction = 'sendrecv';
+          }
+        }
+      } catch {}
+
+      // 3) Ре-негациируем (offer/answer)
+      const offer = await this.peerConnectionManager.createOffer();
+      await this.peerConnectionManager.setLocalDescription(offer);
+      await this.peerConnectionManager.waitForIceGathering();
+
+      const ephemeralKey = await this.options.tokenProvider();
+      const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
+      await this.peerConnectionManager.setRemoteDescription(answer);
+
+      this.successHandler.microphonePermissionGranted?.();
+      this.options.logger?.info?.(
+        '[RealtimeClient] 🎤 Microphone enabled & renegotiated'
+      );
+    } catch (e: any) {
+      this.errorHandler.handle('get_user_media', e, 'critical', false);
+      throw e;
+    }
+  }
   async connect() {
     if (this.connecting) {
       this.errorHandler.handle(
@@ -279,88 +324,132 @@ export class RealtimeClientClass {
 
       this.assertNotAborted(mySeq);
 
-      // 2) PeerConnection
-      const pc = this.peerConnectionManager.create();
-
-      this.assertNotAborted(mySeq);
-
-      // 3) Remote stream
-      this.mediaManager.setupRemoteStream(pc);
-
-      // 4) Local media — не дергаем мик, если нет аудио-модальности и VAD
+      // ✅ 2) СНАЧАЛА проверяем микрофон (ДО создания PeerConnection!)
       const wantsAudioModality =
         Array.isArray(this.options.session?.modalities) &&
         this.options.session!.modalities!.includes('audio');
       const wantsTurnDetection = !!this.options.session?.turn_detection;
       const mustCaptureMic = wantsAudioModality || wantsTurnDetection;
 
-      try {
-        if (mustCaptureMic || this.options.allowConnectWithoutMic === false) {
-          const stream = await this.mediaManager.getUserMedia();
+      const shouldTryMic =
+        mustCaptureMic || this.options.allowConnectWithoutMic === false;
+
+      let localStream: any = null;
+      let needsRecvOnlyTransceiver = false;
+
+      if (shouldTryMic) {
+        // Пытаемся получить доступ к микрофону ДО создания PeerConnection
+        try {
+          localStream = await this.mediaManager.getUserMedia();
           this.assertNotAborted(mySeq);
-          this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
-        } else {
-          // текстовый режим: можно добавить recvonly
-          try {
-            // @ts-ignore
-            if (typeof (pc as any).addTransceiver === 'function') {
-              // @ts-ignore
-              (pc as any).addTransceiver('audio', { direction: 'recvonly' });
-              this.successHandler.iosTransceiverSetted?.();
-            }
-          } catch (e2: any) {
-            this.errorHandler.handle('ios_transceiver', e2, 'info', true);
+          this.options.logger?.info?.(
+            '[RealtimeClient] ✅ Microphone permission granted'
+          );
+        } catch (e: any) {
+          this.options.logger?.warn?.(
+            '[RealtimeClient] ⚠️ Microphone permission denied:',
+            e.message || e
+          );
+
+          // Если allowConnectWithoutMic=false — это критическая ошибка
+          if (this.options.allowConnectWithoutMic === false) {
+            this.errorHandler.handle('get_user_media', e, 'critical', false);
+            throw e;
           }
+
+          // ✅ Иначе это warning - продолжим с recvonly
+          this.errorHandler.handle('get_user_media', e, 'warning', true, {
+            reason: 'Will use recvonly transceiver as fallback',
+            allowConnectWithoutMic: true,
+          });
+
+          needsRecvOnlyTransceiver = true;
         }
-      } catch (e: any) {
-        if (this.options.allowConnectWithoutMic !== false) {
-          try {
+      } else {
+        // Текстовый режим - не нужен микрофон
+        this.options.logger?.info?.(
+          '[RealtimeClient] 📝 Text mode - no microphone needed'
+        );
+        needsRecvOnlyTransceiver = true;
+      }
+
+      this.assertNotAborted(mySeq);
+
+      // ✅ 3) Теперь создаем PeerConnection (после проверки микрофона)
+      const pc = this.peerConnectionManager.create();
+
+      this.assertNotAborted(mySeq);
+
+      // 4) Remote stream
+      this.mediaManager.setupRemoteStream(pc);
+
+      // 5) Добавляем треки или transceiver
+      if (localStream) {
+        // Есть микрофон - добавляем треки
+        this.mediaManager.addLocalStreamToPeerConnection(pc, localStream);
+        this.options.logger?.info?.(
+          '[RealtimeClient] 🎤 Local microphone stream added to PeerConnection'
+        );
+      } else if (needsRecvOnlyTransceiver) {
+        // Нет микрофона - добавляем recvonly transceiver
+        try {
+          // @ts-ignore
+          if (typeof pc.addTransceiver === 'function') {
             // @ts-ignore
-            if (typeof (pc as any).addTransceiver === 'function') {
-              // @ts-ignore
-              (pc as any).addTransceiver('audio', { direction: 'recvonly' });
-              this.successHandler.iosTransceiverSetted?.();
-              this.options.logger?.info?.(
-                '[RealtimeClient] Using recvonly audio (no local mic permission)'
-              );
-            } else {
-              this.options.logger?.warn?.(
-                '[RealtimeClient] addTransceiver not available; continue without local tracks'
-              );
-            }
-          } catch (e2: any) {
-            this.errorHandler.handle('ios_transceiver', e2, 'warning', true);
+            pc.addTransceiver('audio', { direction: 'recvonly' });
+            this.successHandler.iosTransceiverSetted?.();
+            this.options.logger?.info?.(
+              '[RealtimeClient] 🔇 Added recvonly audio transceiver (no mic)'
+            );
+          } else {
+            this.options.logger?.warn?.(
+              '[RealtimeClient] ⚠️ addTransceiver not available, continuing anyway'
+            );
           }
-        } else {
-          throw e;
+        } catch (e2: any) {
+          // Не критично если transceiver не добавился
+          this.errorHandler.handle('ios_transceiver', e2, 'info', true);
+          this.options.logger?.warn?.(
+            '[RealtimeClient] ⚠️ Could not add transceiver:',
+            e2.message || e2
+          );
         }
       }
 
       this.assertNotAborted(mySeq);
 
-      // 5) DataChannel
+      // 6) DataChannel
       this.dataChannelManager.create(pc, async (evt) => {
         await this.eventRouter.processIncomingMessage(evt);
       });
 
-      // 6) Offer
+      // 7) Offer
       const offer = await this.peerConnectionManager.createOffer();
       await this.peerConnectionManager.setLocalDescription(offer);
 
-      // 7) ICE
+      // 8) ICE
       await this.peerConnectionManager.waitForIceGathering();
 
       this.assertNotAborted(mySeq);
 
-      // 8) SDP exchange
+      // 9) SDP exchange
       const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
       await this.peerConnectionManager.setRemoteDescription(answer);
+
+      this.options.logger?.info?.(
+        '[RealtimeClient] 🎉 Connection established successfully'
+      );
     } catch (e: any) {
       if (e?.__ABORT__ || e?.name === 'AbortError') {
+        this.options.logger?.info?.('[RealtimeClient] 🛑 Connection aborted');
         if (this.getStatus() !== 'disconnected') {
           this.setConnectionState('disconnected');
         }
       } else {
+        this.options.logger?.error?.(
+          '[RealtimeClient] ❌ Connection failed:',
+          e.message || e
+        );
         if (this.getStatus() !== 'error') {
           this.setConnectionState('error');
           this.errorHandler.handle('init_peer_connection', e);

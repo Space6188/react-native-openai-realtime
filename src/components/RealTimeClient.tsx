@@ -30,6 +30,7 @@ import {
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 export type RealTimeClientHandle = {
+  enableMicrophone: () => Promise<void>;
   getClient: () => RealtimeClientClass | null;
   getStatus: () =>
     | 'idle'
@@ -208,9 +209,25 @@ export const RealTimeClient = forwardRef<
     allowConnectWithoutMic,
   ]);
 
+  // В файле: RealTimeClient.tsx
+  // Замените часть с созданием successHandler/errorHandler:
+
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
-      // Комбинированный SuccessHandler: и обновляем status локально, и зовем ваши колбеки
+      // ✅ ИСПРАВЛЕНО: ErrorHandler НЕ меняет статус для warning
+      const errorHandler = new ErrorHandler(
+        (event) => {
+          // Меняем статус только для критических ошибок
+          if (event.severity === 'critical') {
+            setStatus('error');
+          }
+          // Вызываем пользовательский onError
+          onError?.(event);
+        },
+        { error: logger?.error }
+      );
+
+      // Комбинированный SuccessHandler
       const successHandler = new SuccessHandler(
         {
           onPeerConnectionCreatingStarted: () => {
@@ -221,7 +238,7 @@ export const RealTimeClient = forwardRef<
             onPeerConnectionCreated?.(pc);
           },
           onRTCPeerConnectionStateChange: (state) => {
-            // локально синхронизируем статус
+            // Синхронизируем статус только для валидных состояний
             if (state === 'connected') setStatus('connected');
             else if (state === 'connecting' || state === 'new')
               setStatus('connecting');
@@ -240,7 +257,7 @@ export const RealTimeClient = forwardRef<
             onDataChannelClose?.();
           },
 
-          // остальное — просто прокидываем
+          // Остальные callbacks - просто прокидываем
           onGetUserMediaSetted,
           onLocalStreamSetted,
           onLocalStreamAddedTrack,
@@ -258,8 +275,6 @@ export const RealTimeClient = forwardRef<
         },
         onSuccess
       );
-
-      const errorHandler = new ErrorHandler(onError, { error: logger?.error });
 
       clientRef.current = new RealtimeClientClass(
         optionsSnapshot as RealtimeClientOptionsBeforePrune,
@@ -315,11 +330,19 @@ export const RealTimeClient = forwardRef<
     }
   }, [tokenProvider]);
 
-  // Отключаем disconnect() на 'background'
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background') {
-        clientRef.current?.disconnect().catch(() => {});
+        const currentStatus = clientRef.current?.getStatus?.();
+        if (currentStatus === 'connecting') {
+          setTimeout(() => {
+            if (AppState.currentState === 'background') {
+              clientRef.current?.disconnect().catch(() => {});
+            }
+          }, 1200);
+        } else {
+          clientRef.current?.disconnect().catch(() => {});
+        }
       }
     };
     const sub = AppState.addEventListener('change', onAppState);
@@ -382,9 +405,9 @@ export const RealTimeClient = forwardRef<
 
     return () => {
       clearTimeout(t);
-      disconnect().catch(() => {});
+      // ВАЖНО: здесь НЕ вызывать disconnect — иначе прервёте connect
     };
-  }, [autoConnect, connect, disconnect]);
+  }, [autoConnect, connect]); // не тяните connect/disconnect в зависимости
 
   const getNextTs = useCallback((): number => {
     try {
@@ -493,6 +516,11 @@ export const RealTimeClient = forwardRef<
     ref,
     () => ({
       getClient: () => clientRef.current,
+      enableMicrophone: async () => {
+        // @ts-ignore внутренний метод класса
+        await clientRef.current?.enableMicrophone?.();
+      },
+
       getStatus: () => status,
       setTokenProvider: (tp: TokenProvider) => {
         try {
