@@ -15,6 +15,7 @@
   - useRealtime
   - useSpeechActivity
   - useMicrophoneActivity
+  - useSessionOptions
 - События: onEvent и удобные client.on(…)
   - Карта входящих событий → «удобные» события
   - Обработка ошибок парсинга JSON
@@ -190,20 +191,56 @@ function YourScreen() {
 - **disconnecting** флаг — предотвращает повторный `disconnect()` во время отключения
 - При попытке повторного вызова логируется warning
 
-### Очистка перед переподключением (preConnectCleanup)
+### Критически важный порядок операций
 
-Метод `preConnectCleanup()` вызывается автоматически перед новым подключением:
+В методе `connect()` проверка микрофона происходит **ДО** создания `PeerConnection`:
 
-- Закрывает возможные "висящие" DataChannel
-- Закрывает старое PeerConnection
-- Останавливает медиа-потоки
-- НЕ трогает EventRouter/ChatStore (чтобы сохранить подписки)
+```ts
+// ✅ ПРАВИЛЬНЫЙ порядок:
+1. Получение токена (tokenProvider)
+2. Проверка микрофона (getUserMedia)  // ← ДО создания PC!
+3. Создание PeerConnection
+4. Добавление треков или recvonly transceiver
+```
 
-**Зачем нужно**: защитный механизм от утечек ресурсов при повторных подключениях. Если предыдущая сессия не закрылась корректно, `preConnectCleanup()` очистит "хвосты" перед созданием нового соединения.
+**Почему это важно:**
+
+- Нельзя добавлять треки в закрытый PeerConnection
+- Если микрофон недоступен, создаем recvonly transceiver сразу
+- Избегаем ошибок "Cannot add tracks: PeerConnection is closed"
+
+**Логика:**
+
+```ts
+// 1. Сначала пытаемся получить микрофон
+let localStream = null;
+let needsRecvOnlyTransceiver = false;
+
+if (shouldTryMic) {
+  try {
+    localStream = await this.mediaManager.getUserMedia();
+  } catch (e) {
+    if (this.options.allowConnectWithoutMic === false) {
+      throw e; // Критическая ошибка
+    }
+    needsRecvOnlyTransceiver = true; // Fallback
+  }
+}
+
+// 2. ТЕПЕРЬ создаем PeerConnection
+const pc = this.peerConnectionManager.create();
+
+// 3. Добавляем треки или transceiver
+if (localStream) {
+  this.mediaManager.addLocalStreamToPeerConnection(pc, localStream);
+} else if (needsRecvOnlyTransceiver) {
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+}
+```
 
 ### Примечание о reconnect и ChatStore
 
-После `disconnect()` внутренние подписки `EventRouter` очищаются, а при новом `connect()` библиотека автоматически перевешивает подписки `ChatStore` (история чата сохраняется, если `deleteChatHistoryOnDisconnect={false}`).
+После `disconnect()` внутренние подписки `EventRouter` очищаются (`chatWired = false`). При новом `connect()` библиотека **восстанавливает подписки** `ChatStore` (если `chatWired=false`). История чата сохраняется, если `deleteChatHistoryOnDisconnect={false}`.
 
 ---
 
@@ -247,14 +284,39 @@ function YourScreen() {
 | logger                          | {debug,info,warn,error}                                       | console.\*                           | Логгер.                                                                                                |
 | autoConnect                     | boolean                                                       | false                                | Подключиться сразу.                                                                                    |
 | attachChat                      | boolean                                                       | true                                 | Прикрепить встроенный чат в контекст.                                                                  |
+| allowConnectWithoutMic          | boolean                                                       | true                                 | Разрешить подключение без микрофона (recvonly transceiver).                                            |
 | children                        | ReactNode или (ctx) => ReactNode                              | -                                    | Если функция — получаете RealtimeContextValue.                                                         |
 
 **Примечания:**
 
-- onSuccess/SuccessCallbacks являются частью низкоуровневого класса RealtimeClientClass (через SuccessHandler). Компонент RealTimeClient их не принимает.
-- **SuccessHandler** принимает как детализированные коллбеки из `SuccessCallbacks`, так и универсальный `onSuccess(stage: string, data?: any)`.
+- Компонент `RealTimeClient` принимает все Success callbacks из `RealtimeSuccessCallbacks` (onPeerConnectionCreated, onDataChannelOpen и т.д.).
 - **chatInverted** управляет сортировкой в mergedChat: false = новые сверху, true = старые сверху
 - Компонент поддерживает `forwardRef` для императивного API (см. раздел "Императивный API через ref")
+
+**Success Callbacks (опциональные):**
+
+| Prop                            | Тип                    | Описание                                 |
+| ------------------------------- | ---------------------- | ---------------------------------------- |
+| onHangUpStarted                 | () => void             | Начало отключения.                       |
+| onHangUpDone                    | () => void             | Отключение завершено.                    |
+| onPeerConnectionCreatingStarted | () => void             | Начало создания PeerConnection.          |
+| onPeerConnectionCreated         | (pc) => void           | PeerConnection создан.                   |
+| onRTCPeerConnectionStateChange  | (state) => void        | Изменение состояния PeerConnection.      |
+| onGetUserMediaSetted            | (stream) => void       | getUserMedia выполнен.                   |
+| onLocalStreamSetted             | (stream) => void       | Локальный поток установлен.              |
+| onLocalStreamAddedTrack         | (track) => void        | Трек добавлен в локальный поток.         |
+| onLocalStreamRemovedTrack       | (track) => void        | Трек удален из локального потока.        |
+| onRemoteStreamSetted            | (stream) => void       | Удаленный поток установлен.              |
+| onDataChannelOpen               | (channel) => void      | DataChannel открыт.                      |
+| onDataChannelMessage            | (message) => void      | Сообщение из DataChannel.                |
+| onDataChannelClose              | () => void             | DataChannel закрыт.                      |
+| onIceGatheringComplete          | () => void             | ICE gathering завершен.                  |
+| onIceGatheringTimeout           | () => void             | Таймаут ICE gathering.                   |
+| onIceGatheringStateChange       | (state) => void        | Изменение состояния ICE gathering.       |
+| onMicrophonePermissionGranted   | () => void             | Разрешение на микрофон получено.         |
+| onMicrophonePermissionDenied    | () => void             | Разрешение на микрофон отклонено.        |
+| onIOSTransceiverSetted          | () => void             | iOS transceiver установлен.              |
+| onSuccess                       | (stage, data?) => void | Универсальный коллбек успешных операций. |
 
 ### attachChat (проп)
 
@@ -303,13 +365,16 @@ export type RealTimeClientHandle = {
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
 
+  // Микрофон
+  enableMicrophone: () => Promise<void>;
+
   // Отправка
   sendRaw: (e: any) => Promise<void> | void;
   sendResponse: (opts?: any) => void;
   sendResponseStrict: (opts: {
     instructions: string;
     modalities?: Array<'audio' | 'text'>;
-    conversation?: 'default' | 'none';
+    conversation?: 'auto' | 'none';
   }) => void;
   updateSession: (patch: Partial<any>) => void;
 
@@ -389,6 +454,49 @@ const addCustomMessage = () => {
 - Синхронизация с внешними системами (например, websocket чат)
 - Дебаггинг и тестирование сортировки
 
+**Примечание:** Подробнее о `ts` и `time` см. раздел "Контекст → Нормализация сообщений".
+
+### enableMicrophone()
+
+Включить микрофон после подключения (ре-негоциация WebRTC).
+
+**Автоматическое использование:**
+
+Метод `enableMicrophone()` автоматически вызывается в хуке `useSessionOptions()` при переключении режима:
+
+```ts
+// В useSessionOptions.ts
+const enforceVoiceSession = async () => {
+  await clientRef.current?.sendRaw({
+    type: 'session.update',
+    session: {
+      modalities: ['audio', 'text'],
+      turn_detection: { type: 'server_vad', ... },
+    },
+  });
+
+  // ← Здесь вызывается enableMicrophone()
+  await clientRef.current?.enableMicrophone?.();
+
+  await switchModeRef.current('voice');
+};
+```
+
+**То есть:**
+
+- При вызове `initializeMode('voice')` → `enforceVoiceSession()` → `enableMicrophone()`
+- При вызове `closeVoiceMode()` → микрофон НЕ отключается (треки остаются)
+- Для ручного отключения используйте `getLocalStream().getAudioTracks().forEach(t => t.enabled = false)`
+
+**Что происходит внутри:**
+
+1. Получение микрофона через `getUserMedia`
+2. Добавление треков в существующий PeerConnection
+3. Ре-негоциация WebRTC (offer/answer/ICE)
+4. Обмен SDP с OpenAI
+
+**Важно:** Метод требует активного PeerConnection и открытого DataChannel. Вызывается автоматически в `enforceVoiceSession()` (хук `useSessionOptions`).
+
 ---
 
 ## Контекст: RealtimeContextValue
@@ -407,8 +515,8 @@ const addCustomMessage = () => {
 | updateSession        | (patch) => void                                                    | Отправить session.update (частичное обновление сессии).                                            |
 | sendRaw              | (event: any) => void                                               | Отправить «сырое» событие в DataChannel (через middleware).                                        |
 | **addMessage**       | **(AddableMessage \| AddableMessage[]) => string \| string[]**     | **Добавить ваши сообщения в локальную ленту. Возвращает ID созданного сообщения (или массив ID).** |
-| **clearAdded**       | **() => void**                                                     | **Очистить только ваши добавленные UI-сообщения (не трогает ChatStore).**                          |
-| **clearChatHistory** | **() => void**                                                     | **Очистить встроенный ChatStore (user/assistant сообщения).**                                      |
+| **clearAdded**       | **() => void**                                                     | **Очистить локальные UI-сообщения (не трогает ChatStore).**                                        |
+| **clearChatHistory** | **() => void**                                                     | **Очистить встроенный ChatStore (см. раздел "Встроенный чат").**                                   |
 
 ### Нормализация сообщений (addMessage)
 
@@ -598,6 +706,119 @@ function SpeechIndicator() {
 
 Зачем: чтобы рисовать индикатор уровней, подсвечивать PTT, детектировать молчание/речь.
 
+### useSessionOptions({ client, switchMode, onSuccess?, onError? })
+
+**Назначение:** Управление режимами работы (voice/text) и манипуляции с сессией.
+
+**Параметры:**
+
+| Параметр   | Тип                                          | Описание                                                |
+| ---------- | -------------------------------------------- | ------------------------------------------------------- |
+| client     | `RealtimeClientClass \| null`                | Экземпляр клиента (из контекста или переданный вручную) |
+| switchMode | `(mode: 'voice' \| 'text') => Promise<void>` | Функция переключения режима                             |
+| onSuccess  | `(stage: string) => void`                    | Callback успешных операций                              |
+| onError    | `(stage: string, error: any) => void`        | Callback ошибок                                         |
+
+**Возвращаемые методы:**
+
+| Метод                                         | Описание                                            |
+| --------------------------------------------- | --------------------------------------------------- |
+| `initializeMode(mode)`                        | Инициализация режима (voice/text) после подключения |
+| `closeVoiceMode()`                            | Корректное закрытие голосового режима               |
+| `cancelAssistant()`                           | Отмена текущего ответа ассистента                   |
+| `handleSendMessage(text, onSuccess, onError)` | Отправка текстового сообщения                       |
+| `enforceTextSession()`                        | Принудительное переключение в текстовый режим       |
+| `enforceVoiceSession()`                       | Принудительное переключение в голосовой режим       |
+| `setRemoteTracksEnabled(enabled)`             | Вкл/выкл удаленные аудио треки                      |
+
+**Пример использования:**
+
+```tsx
+import { useSessionOptions, useRealtime } from 'react-native-openai-realtime';
+import { useState } from 'react';
+
+function ChatScreen() {
+  const { client } = useRealtime();
+  const [mode, setMode] = useState<'voice' | 'text'>('text');
+
+  const { initializeMode, closeVoiceMode, cancelAssistant, handleSendMessage } =
+    useSessionOptions({
+      client: client!,
+      switchMode: async (newMode) => {
+        setMode(newMode);
+        console.log(`Switched to ${newMode} mode`);
+      },
+      onSuccess: (stage) => console.log('✅', stage),
+      onError: (stage, error) => console.error('❌', stage, error),
+    });
+
+  // Переключение в голосовой режим
+  const enableVoice = async () => {
+    try {
+      await initializeMode('voice'); // ← Вызовет enableMicrophone()
+    } catch (e) {
+      console.error('Failed to enable voice:', e);
+    }
+  };
+
+  // Переключение в текстовый режим
+  const enableText = async () => {
+    try {
+      await closeVoiceMode(); // ← Отменит ассистента, переключит modalities
+    } catch (e) {
+      console.error('Failed to enable text:', e);
+    }
+  };
+
+  // Отправка текста
+  const sendText = (text: string) => {
+    handleSendMessage(
+      text,
+      () => console.log('Sent'),
+      (e) => console.error('Failed:', e)
+    );
+  };
+
+  // Прерывание ассистента
+  const stopAssistant = async () => {
+    await cancelAssistant();
+  };
+
+  return (
+    <View>
+      <Button title="Voice Mode" onPress={enableVoice} />
+      <Button title="Text Mode" onPress={enableText} />
+      <Button title="Stop Assistant" onPress={stopAssistant} />
+    </View>
+  );
+}
+```
+
+**Внутренняя механика:**
+
+```ts
+// enforceVoiceSession() последовательность:
+1. updateSession({ modalities: ['audio', 'text'], turn_detection: {...} })
+2. delay(300) // Ждем применения сессии
+3. enableMicrophone() // ← Ре-негоциация WebRTC
+4. switchMode('voice')
+5. setRemoteTracksEnabled(true)
+6. onSuccess('voice_initialized')
+
+// closeVoiceMode() последовательность:
+1. cancelAssistant() // response.cancel + output_audio_buffer.clear
+2. setRemoteTracksEnabled(false)
+3. enforceTextSession() // updateSession({ modalities: ['text'] })
+4. switchMode('text')
+5. onSuccess('voice_closed')
+```
+
+**Важно:**
+
+- Методы асинхронные, обрабатывайте try/catch
+- `initializeMode()` требует активного соединения (status='connected')
+- `closeVoiceMode()` не отключает микрофон физически (треки остаются enabled)
+
 ---
 
 ## События: onEvent и client.on(…)
@@ -627,16 +848,21 @@ function SpeechIndicator() {
 | Raw event (onEvent.type)                              | Эмит                       | Payload                                            |
 | ----------------------------------------------------- | -------------------------- | -------------------------------------------------- |
 | conversation.item.created (role=user)                 | user:item_started          | { itemId }                                         |
+| conversation.item.created (role=assistant)            | assistant:item_started     | { itemId }                                         |
 | conversation.item.input_audio_transcription.delta     | user:delta                 | { itemId, delta }                                  |
 | conversation.item.input_audio_transcription.completed | user:completed             | { itemId, transcript }                             |
 | conversation.item.input_audio_transcription.failed    | user:failed                | { itemId, error }                                  |
 | conversation.item.truncated                           | user:truncated             | { itemId }                                         |
 | response.created                                      | assistant:response_started | { responseId }                                     |
+| response.text.delta                                   | assistant:delta            | { responseId, delta, channel: 'output_text' }      |
+| response.output_item.text.delta                       | assistant:delta            | { responseId, delta, channel: 'output_text' }      |
 | response.output_text.delta                            | assistant:delta            | { responseId, delta, channel: 'output_text' }      |
 | response.audio_transcript.delta                       | assistant:delta            | { responseId, delta, channel: 'audio_transcript' } |
+| response.text.done                                    | assistant:completed        | { responseId, status: 'done' }                     |
+| response.output_item.text.done                        | assistant:completed        | { responseId, status: 'done' }                     |
+| response.output_text.done                             | assistant:completed        | { responseId, status: 'done' }                     |
 | response.completed                                    | assistant:completed        | { responseId, status: 'done' }                     |
 | response.canceled                                     | assistant:completed        | { responseId, status: 'canceled' }                 |
-| response.output_text.done                             | assistant:completed        | { responseId, status: 'done' }                     |
 | response.audio_transcript.done                        | assistant:completed        | { responseId, status: 'done' }                     |
 | response.function_call_arguments.delta                | tool:call_delta            | { call_id, name, delta }                           |
 | response.function_call_arguments.done                 | tool:call_done             | { call_id, name, args }                            |
@@ -656,9 +882,45 @@ function SpeechIndicator() {
 **⚠️ Важно:** Wildcard‑подписки вида `'user:*'` **не поддерживаются**. Подписывайтесь на точные строки:
 
 - `user:item_started` | `user:delta` | `user:completed` | `user:failed` | `user:truncated`
-- `assistant:response_started` | `assistant:delta` | `assistant:completed`
+- `assistant:item_started` | `assistant:response_started` | `assistant:delta` | `assistant:completed`
 - `tool:call_delta` | `tool:call_done`
 - `error`
+
+### Обработка текстовых сообщений (ВАЖНО!)
+
+Библиотека обрабатывает **ВСЕ** типы текстовых дельт от ассистента:
+
+- `response.text.delta` — основной тип для текстовых ответов
+- `response.output_item.text.delta` — альтернативный формат
+- `response.output_text.delta` — legacy формат
+- `response.audio_transcript.delta` — транскрипция голосового ответа
+
+Все они маршрутизируются в одно событие `assistant:delta` с разными `channel`:
+
+- `channel: 'output_text'` — текстовый ответ
+- `channel: 'audio_transcript'` — транскрипция аудио
+
+**Обработка typed-ввода пользователя:**
+
+При отправке текстового сообщения через `sendTextMessage()`:
+
+```ts
+// Создается conversation item
+{
+  type: 'conversation.item.created',
+  item: {
+    role: 'user',
+    content: [{ type: 'input_text', text: 'Привет' }]
+  }
+}
+
+// Router автоматически:
+1. Эмитит 'user:item_started' { itemId }
+2. Извлекает текст из content[0]
+3. Эмитит 'user:completed' { itemId, transcript: 'Привет' }
+```
+
+То есть текстовые сообщения пользователя обрабатываются **синхронно** (нет дельт).
 
 ---
 
@@ -722,6 +984,60 @@ incomingMiddleware={[
 
 **Важно:** Если middleware вернёт `'stop'`, событие не дойдёт до router, `onEvent` и ваши подписки `client.on()` не будут вызваны.
 
+### Порядок выполнения и доступ к client
+
+**Важное обновление:** С версии 0.4.2 middleware получают **полный доступ** к клиенту (`RealtimeClientClass`):
+
+```ts
+type MiddlewareCtx = {
+  event: any; // входящее сообщение
+  send: (e: any) => Promise<void>; // отправка в DataChannel
+  client: RealtimeClientClass; // ← ПОЛНЫЙ экземпляр класса
+};
+```
+
+**Схема выполнения:**
+
+```
+DataChannel message
+  ↓
+Incoming Middleware[0]  ← ctx.client доступен
+  ↓
+Incoming Middleware[1]  ← ctx.client доступен
+  ↓
+EventRouter (createDefaultRouter)
+  ↓
+hooks.onEvent()
+  ↓
+Emit удобные события
+  ↓
+Ваши client.on() подписки
+```
+
+**Важно:** До вызова middleware клиент уже инициализирован, поэтому можно безопасно:
+
+```ts
+const myMiddleware: IncomingMiddleware = async ({ event, send, client }) => {
+  // ✅ Доступны все методы клиента
+  const chat = client.getChat();
+  const status = client.getStatus();
+  const dc = client.getDataChannel();
+
+  // ✅ Можно отправлять события
+  if (event.type === 'user:delta' && chat.length > 100) {
+    await send({ type: 'conversation.item.truncate' });
+  }
+
+  // ✅ Можно модифицировать событие
+  if (event.type === 'response.audio_transcript.delta') {
+    return {
+      ...event,
+      delta: event.delta.toUpperCase(), // Капслок для транскриптов
+    };
+  }
+};
+```
+
 ---
 
 ## Встроенный чат: ChatStore/ChatAdapter/ExtendedChatMsg
@@ -767,27 +1083,6 @@ clearChatHistory(); // Удалит только chatStore сообщения
 ```
 
 **Примечание**: сортировка применяется к объединенному массиву `[...chatStoreMessages, ...addedMessages]` и влияет на порядок отображения в UI.
-
-### Механизм wireChatStore (внутренний)
-
-`wireChatStore(force?: boolean)` — внутренний метод подписки ChatStore на события EventRouter:
-
-- **chatWired** флаг — отслеживает, навешаны ли подписки
-- При `disconnect()` → `EventRouter.cleanup()` → `chatWired = false`
-- При новом `connect()` → автоматический `wireChatStore()` восстанавливает подписки
-- **force=true** — принудительная перевеска (например, при реинициализации)
-
-**Подписки ChatStore:**
-
-- `user:item_started` → `chatStore.startUser(itemId)`
-- `user:delta` → `chatStore.putDelta('user', itemId, delta)`
-- `user:completed` → `chatStore.finalize('user', itemId, 'done', transcript)`
-- `user:failed` / `user:truncated` → `chatStore.finalize('user', itemId, 'done')`
-- `assistant:response_started` → `chatStore.startAssistant(responseId)`
-- `assistant:delta` → `chatStore.putDelta('assistant', responseId, delta)`
-- `assistant:completed` → `chatStore.finalize('assistant', responseId, status)`
-
-**Важно:** История чата сохраняется при reconnect (если `deleteChatHistoryOnDisconnect={false}`), так как подписки восстанавливаются автоматически.
 
 Опции ChatStore:
 
@@ -839,11 +1134,16 @@ await sendRaw({ type: 'response.cancel' });
 
 ### sendResponse(opts?)
 
-Обёртка над response.create. Если opts не переданы — отправится пустой объект.
+Обёртка над response.create. **Если opts не переданы** — отправится пустой объект `{}` (сервер использует дефолтные настройки сессии).
 
 ```ts
 sendResponse({ instructions: 'Скажи тост', modalities: ['audio', 'text'] });
+
+// Без параметров (сервер использует текущую session)
+sendResponse();
 ```
+
+**Отличие от sendResponseStrict():** `instructions` НЕ обязателен, можно вызывать без аргументов.
 
 ### sendResponseStrict({ instructions, modalities, conversation? })
 
@@ -884,6 +1184,32 @@ sendResponseStrict({
 - **instructions** (обязательный) — инструкции для модели
 - **modalities** — массив модальностей ответа: ['audio'], ['text'] или ['audio', 'text']
 - **conversation** — 'default' (с историей) или 'none' (без истории)
+
+### sendTextMessage(text, options?)
+
+Отправить текстовое сообщение (используется в `useSessionOptions`):
+
+```ts
+client.sendTextMessage('Привет', {
+  responseModality: 'text', // 'text' или 'audio'
+  instructions: 'Ответь кратко',
+  conversation: 'auto', // 'auto' или 'none'
+});
+```
+
+**Что происходит внутри:**
+
+1. Создается `conversation.item.create` с типом `message`
+2. Отправляется `response.create` с указанными параметрами
+
+**Параметры:**
+
+- `text` — текст сообщения
+- `options.responseModality` — модальность ответа ('text' или 'audio')
+- `options.instructions` — инструкции для модели
+- `options.conversation` — 'auto' (с историей) или 'none' (без истории)
+
+**Важно:** По умолчанию `conversation: 'auto'` сохраняет контекст разговора.
 
 ### response.cancel
 
@@ -1019,7 +1345,7 @@ type SessionConfig = {
     threshold?: number;
     prefix_padding_ms?: number;
   };
-  input_audio_transcription?: { model: string; language?: string }; // Whisper-1 или 'gpt-4o-transcribe'
+  input_audio_transcription?: { model: string; language?: string }; // 'whisper-1' или 'gpt-4o-transcribe'
   tools?: any[]; // Realtime tools spec (проксируется в OpenAI)
   instructions?: string; // системные инструкции
 };
@@ -1163,41 +1489,7 @@ new RealtimeClientClass(
 | getLocalStream()                                                | MediaStream (локальный).                                                 |
 | getRemoteStream()                                               | MediaStream (удалённый).                                                 |
 | getChat()                                                       | Текущая история встроенного чат-стора.                                   |
-
-### EventRouter.setContext()
-
-**Внутренний метод** `setContext(client, sendRaw)` используется для обновления ссылок после создания клиента:
-
-```ts
-setContext(
-  client: RealtimeClientClass | null,
-  sendRaw: (e: any) => Promise<void>
-): void
-```
-
-- Позволяет middleware использовать актуальные ссылки на client и sendRaw
-- Вызывается автоматически после инициализации
-- НЕ предназначен для публичного использования
-
-### EventRouter.cleanup()
-
-**Внутренний метод** очистки подписок EventRouter:
-
-```ts
-cleanup() {
-  this.listeners.clear();
-  this.functionArgsBuffer.clear();
-}
-```
-
-**Назначение:**
-
-- Удаляет все подписки на события (`listeners.clear()`)
-- Очищает буфер аргументов function calls
-- Вызывается автоматически при `disconnect()`
-- После очистки требуется повторная подписка (например, `wireChatStore()`)
-
-**НЕ предназначен для публичного использования** — вызывается автоматически внутри `RealtimeClientClass.disconnect()`.
+| enableMicrophone()                                              | Включить микрофон после подключения (ре-негоциация).                     |
 
 ### Concurrent Guards (защита от конкурентных вызовов)
 
@@ -1486,6 +1778,31 @@ deepMerge({ arr: [1, 2], obj: { a: 1 } }, { arr: [3], obj: { b: 2 } });
 - Если `webrtc.configuration` не передан, библиотека создаёт минимальную конфигурацию с `iceServers` из `webrtc.iceServers` и `iceCandidatePoolSize: 10`.
 - Для полного контроля передавайте `webrtc.configuration` явно.
 
+### Работа без микрофона (allowConnectWithoutMic)
+
+Библиотека поддерживает подключение без микрофона:
+
+- **allowConnectWithoutMic={true}** (по умолчанию) — при отсутствии микрофона создается recvonly transceiver
+- **allowConnectWithoutMic={false}** — отсутствие микрофона считается критической ошибкой
+
+**Когда использовать:**
+
+- Режим "только прослушивание" (assistant говорит, пользователь не отвечает голосом)
+- Тестирование без физического микрофона
+- Ограниченные права доступа (корпоративные устройства)
+
+**Пример:**
+
+```tsx
+<RealTimeClient
+  allowConnectWithoutMic={true}
+  session={{
+    modalities: ['audio', 'text'], // Получаем аудио, отправляем текст
+    turn_detection: null, // VAD не нужен без микрофона
+  }}
+/>
+```
+
 ### Автоотключение в фоне
 
 - Компонент `RealTimeClient` автоматически разрывает соединение при переходе приложения в фоновый режим или неактивное состояние.
@@ -1741,7 +2058,9 @@ session={{
   voice: 'shimmer',
   modalities: ['audio', 'text'],
   input_audio_transcription: {
-    model: 'whisper-1' // БЕЗ ЭТОГО НЕ БУДЕТ ТРАНСКРИПЦИИ!
+    model: 'whisper-1' // Быстрая транскрипция (рекомендуется)
+    // или 'gpt-4o-transcribe' // Более точная, но медленнее
+    // БЕЗ ЭТОГО НЕ БУДЕТ ТРАНСКРИПЦИИ!
   },
   turn_detection: {
     type: 'server_vad',
@@ -1757,10 +2076,11 @@ session={{
 1. ✅ `input_audio_transcription.model` указан (`whisper-1` или `gpt-4o-transcribe`)
 2. ✅ `chatEnabled !== false` (по умолчанию `true`)
 3. ✅ `attachChat !== false` (по умолчанию `true`)
-4. ✅ `greetEnabled` или ручной `sendResponse()` / `sendRaw({ type: 'response.create' })`
-5. ✅ Микрофон работает (проверьте permissions)
-6. ✅ События приходят (смотрите `onEvent` лог)
-7. ✅ Статус соединения `'connected'` (выполните `connect()` или включите `autoConnect={true}`)
+4. ✅ Микрофон работает (разрешение granted)
+5. ✅ Соединение `status='connected'`
+6. ✅ Хотя бы один `response.create` отправлен (greet или manual)
+7. ✅ События приходят (проверьте `onEvent` лог)
+8. ✅ Для текстовых сообщений: используйте `handleSendMessage()` (из useSessionOptions) или manual sequence
 
 **Правильный минимум:**
 
@@ -1769,7 +2089,10 @@ session={{
   session={{
     model: 'gpt-4o-realtime-preview-2024-12-17',
     voice: 'shimmer',
-    input_audio_transcription: { model: 'gpt-4o-transcribe' }, // или 'whisper-1'
+    input_audio_transcription: {
+      model: 'whisper-1', // Быстрая транскрипция (рекомендуется)
+      // или 'gpt-4o-transcribe' // Более точная, но медленнее
+    },
     modalities: ['audio', 'text'],
     turn_detection: {
       type: 'server_vad',
@@ -1790,6 +2113,31 @@ session={{
 await sendRaw({ type: 'input_audio_buffer.commit' });
 await sendRaw({ type: 'response.create' });
 await sendRaw({ type: 'input_audio_buffer.clear' });
+```
+
+**Для текстового режима:**
+
+```ts
+// ✅ Правильно - через sendTextMessage() (в useSessionOptions)
+handleSendMessage(text, onSuccess, onError);
+
+// ✅ Правильно - ручная отправка
+await sendRaw({
+  type: 'conversation.item.create',
+  item: {
+    type: 'message',
+    role: 'user',
+    content: [{ type: 'input_text', text: 'Привет' }]
+  }
+});
+await sendResponseStrict({
+  instructions: 'Ответь на вопрос',
+  modalities: ['text'],
+  conversation: 'auto' // ← Важно для контекста!
+});
+
+// ❌ Неправильно - только item без response
+await sendRaw({ type: 'conversation.item.create', ... }); // Ничего не произойдет
 ```
 
 **При ручном чате** (`chatEnabled={false}`) собирайте ленту сами по `client.on('user:*', 'assistant:*')`.
@@ -1862,6 +2210,7 @@ type RealTimeClientProps = {
   deleteChatHistoryOnDisconnect?: boolean; // default: true
   autoConnect?: boolean; // default: false
   attachChat?: boolean; // default: true
+  allowConnectWithoutMic?: boolean; // default: true
 
   // WebRTC
   webrtc?: {
