@@ -283,6 +283,61 @@ export class RealtimeClientClass {
       throw e;
     }
   }
+  public async disableMicrophone() {
+    try {
+      const pc = this.peerConnectionManager.getPeerConnection();
+      if (!pc) throw new Error('PeerConnection not created');
+
+      // 1) остановим локальные аудиотреки
+      const local = this.mediaManager.getLocalStream();
+      if (local?.getAudioTracks) {
+        local.getAudioTracks().forEach((t: any) => {
+          try {
+            t.stop();
+          } catch {}
+        });
+      }
+
+      // 2) переведём аудио трансивер в recvonly и отцепим track
+      try {
+        const txs = (pc as any).getTransceivers?.() || [];
+        const audioTx = txs.find(
+          (t: any) =>
+            t?.sender?.track?.kind === 'audio' ||
+            t?.receiver?.track?.kind === 'audio'
+        );
+        if (audioTx?.sender) {
+          await audioTx.sender.replaceTrack(null);
+        }
+        if (audioTx) {
+          if (typeof audioTx.setDirection === 'function') {
+            audioTx.setDirection('recvonly');
+          } else {
+            // @ts-ignore
+            audioTx.direction = 'recvonly';
+          }
+        }
+      } catch {}
+
+      // 3) ре-негациация
+      const offer = await this.peerConnectionManager.createOffer();
+      await this.peerConnectionManager.setLocalDescription(offer);
+      await this.peerConnectionManager.waitForIceGathering();
+      const ephemeralKey = await this.options.tokenProvider();
+      const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
+      await this.peerConnectionManager.setRemoteDescription(answer);
+
+      // 4) подчистим ссылку на локальный stream
+      this.mediaManager.stopLocalStream();
+
+      this.options.logger?.info?.(
+        '[RealtimeClient] 🔇 Microphone disabled & renegotiated'
+      );
+    } catch (e: any) {
+      this.errorHandler.handle('local_stream', e, 'warning', true);
+      throw e;
+    }
+  }
   async connect() {
     if (this.connecting) {
       this.errorHandler.handle(

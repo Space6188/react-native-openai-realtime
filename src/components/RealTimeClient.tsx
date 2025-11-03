@@ -40,6 +40,7 @@ export type RealTimeClientHandle = {
     | 'error';
   setTokenProvider: (tp: TokenProvider) => void;
 
+  disableMicrophone: () => Promise<void>;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
 
@@ -405,9 +406,9 @@ export const RealTimeClient = forwardRef<
 
     return () => {
       clearTimeout(t);
-      // ВАЖНО: здесь НЕ вызывать disconnect — иначе прервёте connect
     };
-  }, [autoConnect, connect]); // не тяните connect/disconnect в зависимости
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConnect]);
 
   const getNextTs = useCallback((): number => {
     try {
@@ -516,11 +517,10 @@ export const RealTimeClient = forwardRef<
     ref,
     () => ({
       getClient: () => clientRef.current,
-      enableMicrophone: async () => {
-        // @ts-ignore внутренний метод класса
-        await clientRef.current?.enableMicrophone?.();
-      },
-
+      enableMicrophone: async () =>
+        await clientRef.current?.enableMicrophone?.(),
+      disableMicrophone: async () =>
+        await clientRef.current?.disableMicrophone?.(),
       getStatus: () => status,
       setTokenProvider: (tp: TokenProvider) => {
         try {

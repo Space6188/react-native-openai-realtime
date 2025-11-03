@@ -1,8 +1,6 @@
 export interface UseSessionOptionsParams {
   /** Client из useRealtime() */
   client: any;
-  /** switchMode из useRealtime() */
-  switchMode: (mode: 'voice' | 'text') => Promise<void>;
   /** Callback при успешной операции */
   onSuccess?: (
     stage:
