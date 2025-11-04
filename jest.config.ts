@@ -12,9 +12,11 @@ const config: Config = {
   moduleNameMapper: {
     '^@react-native-openai-realtime/(.*)$': '<rootDir>/src/$1',
     '^react-native$': 'react-native',
+    '^react-native-incall-manager$':
+      '<rootDir>/__mocks__/react-native-incall-manager.ts',
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@react-native|react-native|@react-native-community|@react-navigation)/)',
+    'node_modules/(?!(@react-native|react-native|@react-native-community|@react-navigation|react-native-incall-manager)/)',
   ],
   testPathIgnorePatterns: ['/node_modules/', '/dist/', '/build/'],
   collectCoverageFrom: [
