@@ -18,9 +18,9 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
   }, [client]);
 
   useEffect(() => {
-    // const unsubscribe = subscribeToAssistantEvents(() => restartSpeakerRoute());
-    setMicrophoneEnabled(false);
-    const unsubscribe = subscribeToAssistantEvents();
+    const unsubscribe = subscribeToAssistantEvents(() => restartSpeakerRoute());
+    // setMicrophoneEnabled(false);
+    // const unsubscribe = subscribeToAssistantEvents();
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -97,7 +97,7 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         'assistant:response_started',
         ({ responseId }: any) => {
           lastResponseIdRef.current = responseId;
-          // setRemoteTracksEnabled(true);
+          setRemoteTracksEnabled(true);
           onAssistantStarted?.();
           console.log('🎤 Assistant started:', responseId);
         }
@@ -120,7 +120,7 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         } catch {}
       };
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [setRemoteTracksEnabled]
   );
 
@@ -179,14 +179,16 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
       await (clientRef.current as any)?.sendRaw({
         type: 'session.update',
         session: {
+          model: 'gpt-4o-realtime-preview-2024-12-17',
           modalities: ['audio', 'text'],
+          voice: 'shimmer',
           turn_detection: {
             type: 'server_vad',
             threshold: 0.7,
             prefix_padding_ms: 500,
             silence_duration_ms: 1200,
           },
-          input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
+          input_audio_transcription: { model: 'whisper-1' },
         },
       });
       setMicrophoneEnabled(true);
