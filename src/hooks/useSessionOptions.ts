@@ -1,7 +1,6 @@
-// hooks/useSessionOptions.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import InCallManager from 'react-native-incall-manager';
-import { RealtimeClientClass } from 'react-native-openai-realtime';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -210,21 +209,6 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
       // 4. Включаем треки
       setRemoteTracksEnabled(true);
       setMicrophoneEnabled(true);
-      // 5. Проверяем, что микрофон действительно включен
-      const localStream = clientRef.current?.getLocalStream?.();
-      if (localStream) {
-        const tracks = localStream.getAudioTracks();
-        console.log(
-          '🎤 Audio tracks after enable:',
-          tracks.map((t: any) => ({
-            id: t.id,
-            enabled: t.enabled,
-            readyState: t.readyState,
-          }))
-        );
-      } else {
-        console.warn('⚠️ No local stream found after voice session setup');
-      }
 
       console.log('✅ VOICE mode activated');
     } catch (e) {
