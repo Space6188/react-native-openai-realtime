@@ -1,10 +1,12 @@
+// hooks/useSessionOptions.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import InCallManager from 'react-native-incall-manager';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const useSessionOptions = (client: any) => {
-  const clientRef = useRef(client);
+  const clientRef = useRef<RealtimeClientClass>(client);
   const lastResponseIdRef = useRef<string | null>(null);
   const [mode, setMode] = useState<'text' | 'voice'>('text');
   const [isModeReady, setIsModeReady] = useState<
@@ -16,7 +18,8 @@ export const useSessionOptions = (client: any) => {
   }, [client]);
 
   useEffect(() => {
-    const unsubscribe = subscribeToAssistantEvents(() => restartSpeakerRoute());
+    // const unsubscribe = subscribeToAssistantEvents(() => restartSpeakerRoute());
+    const unsubscribe = subscribeToAssistantEvents();
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -48,6 +51,39 @@ export const useSessionOptions = (client: any) => {
     }
   }, []);
 
+  const setMicrophoneEnabled = useCallback((enabled: boolean) => {
+    try {
+      // Убедитесь, что clientRef.current и getLocalStream() существуют
+      const clientRefCurrent = clientRef.current;
+      if (
+        !clientRefCurrent ||
+        typeof clientRefCurrent.getLocalStream !== 'function'
+      ) {
+        return;
+      }
+
+      const localStream = clientRef.current.getLocalStream?.();
+      if (localStream) {
+        console.log('🎤 localStream:', localStream);
+        localStream.getAudioTracks().forEach((track: any) => {
+          // Устанавливаем свойство enabled
+          track.enabled = enabled;
+          console.log(
+            `🎤 Microphone track ${enabled ? 'enabled' : 'disabled'}`
+          );
+        });
+      }
+    } catch (e) {
+      console.warn('⚠️ setMicrophoneEnabled failed:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (client && client.getStatus() === 'connected' && mode === 'text') {
+      setMicrophoneEnabled(false);
+    }
+  }, [client, mode, setMicrophoneEnabled]);
+
   const restartSpeakerRoute = useCallback(async () => {
     try {
       InCallManager.start({ media: 'audio', auto: false, ringback: '' });
@@ -66,7 +102,7 @@ export const useSessionOptions = (client: any) => {
         'assistant:response_started',
         ({ responseId }: any) => {
           lastResponseIdRef.current = responseId;
-          setRemoteTracksEnabled(true);
+          // setRemoteTracksEnabled(true);
           onAssistantStarted?.();
           console.log('🎤 Assistant started:', responseId);
         }
@@ -89,7 +125,7 @@ export const useSessionOptions = (client: any) => {
         } catch {}
       };
     },
-    [setRemoteTracksEnabled]
+    []
   );
 
   const cancelAssistantNow = useCallback(
@@ -109,18 +145,20 @@ export const useSessionOptions = (client: any) => {
           type: 'output_audio_buffer.clear',
         });
         setRemoteTracksEnabled(false);
-
+        setMicrophoneEnabled(false);
         await delay(120);
         onComplete?.();
       } catch (e) {
         onFail?.(e);
       }
     },
-    [setRemoteTracksEnabled]
+    [setRemoteTracksEnabled, setMicrophoneEnabled]
   );
 
   const enforceTextSession = useCallback(async () => {
     try {
+      setRemoteTracksEnabled(false);
+      setMicrophoneEnabled(false);
       await cancelAssistantNow();
       await clientRef.current?.sendRaw({
         type: 'session.update',
@@ -133,12 +171,10 @@ export const useSessionOptions = (client: any) => {
         },
       });
       InCallManager.stop();
-      setRemoteTracksEnabled(false);
     } catch {
       throw new Error('Failed to enforce text session');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setRemoteTracksEnabled]);
+  }, [setRemoteTracksEnabled, setMicrophoneEnabled, cancelAssistantNow]);
 
   const enforceVoiceSession = useCallback(async () => {
     try {
@@ -149,25 +185,21 @@ export const useSessionOptions = (client: any) => {
           turn_detection: {
             type: 'server_vad',
             threshold: 0.7,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 700,
+            prefix_padding_ms: 500,
+            silence_duration_ms: 1200,
           },
-          input_audio_transcription: { model: 'whisper-1' },
+          input_audio_transcription: { model: 'gpt-4o-mini-transcribe' },
         },
       });
+      setMicrophoneEnabled(true);
       setRemoteTracksEnabled(true);
       await restartSpeakerRoute();
     } catch {
       throw new Error('Failed to enforce voice session');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setRemoteTracksEnabled]);
+  }, [setRemoteTracksEnabled, setMicrophoneEnabled, restartSpeakerRoute]);
 
   const initSession = async (newMode: 'text' | 'voice') => {
-    if (mode === newMode) {
-      setIsModeReady('connected');
-      return;
-    }
     setIsModeReady('connecting');
     const dcOpened = await waitUntilDataChannelOpen(5000);
     if (!dcOpened) {

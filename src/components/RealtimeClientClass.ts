@@ -51,8 +51,11 @@ export class RealtimeClientClass {
   private chatStore?: ChatStore;
   private chatWired = false;
 
-  // Guard для гонок connect/disconnect
   private connectSeq = 0;
+
+  // Добавляем отслеживание состояния DataChannel
+  private dataChannelReady = false;
+  private peerConnectionConnected = false;
 
   constructor(
     userOptions: RealtimeClientOptionsBeforePrune,
@@ -75,6 +78,8 @@ export class RealtimeClientClass {
 
     const callbacks = {
       onPeerConnectionCreatingStarted: () => {
+        this.peerConnectionConnected = false;
+        this.dataChannelReady = false;
         this.setConnectionState('connecting');
       },
       onRTCPeerConnectionStateChange: (
@@ -86,17 +91,28 @@ export class RealtimeClientClass {
           | 'failed'
           | 'closed'
       ) => {
-        if (state === 'connected') this.setConnectionState('connected');
-        else if (state === 'connecting' || state === 'new')
+        if (state === 'connected') {
+          this.peerConnectionConnected = true;
+          this.updateConnectionState();
+        } else if (state === 'connecting' || state === 'new') {
+          this.peerConnectionConnected = false;
           this.setConnectionState('connecting');
-        else if (state === 'failed') this.setConnectionState('error');
-        else if (state === 'disconnected' || state === 'closed')
+        } else if (state === 'failed') {
+          this.peerConnectionConnected = false;
+          this.dataChannelReady = false;
+          this.setConnectionState('error');
+        } else if (state === 'disconnected' || state === 'closed') {
+          this.peerConnectionConnected = false;
+          this.dataChannelReady = false;
           this.setConnectionState('disconnected');
+        }
       },
       onDataChannelOpen: () => {
-        this.setConnectionState('connected');
+        this.dataChannelReady = true;
+        this.updateConnectionState();
       },
       onDataChannelClose: () => {
+        this.dataChannelReady = false;
         this.setConnectionState('disconnected');
       },
     };
@@ -146,6 +162,36 @@ export class RealtimeClientClass {
     }
   }
 
+  /**
+   * Обновляет состояние подключения на основе состояния PeerConnection и DataChannel
+   * Соединение считается полностью установленным только когда оба готовы
+   */
+  private updateConnectionState() {
+    // Проверяем также readyState DataChannel для надежности
+    const dc = this.dataChannelManager.getDataChannel();
+    const dcActuallyOpen = dc && dc.readyState === 'open';
+
+    if (
+      this.peerConnectionConnected &&
+      this.dataChannelReady &&
+      dcActuallyOpen
+    ) {
+      this.setConnectionState('connected');
+      this.options.logger?.info?.(
+        '[RealtimeClient] ✅ Fully connected (PC + DC ready)'
+      );
+    } else if (this.peerConnectionConnected || this.dataChannelReady) {
+      // Хотя бы одно из соединений установлено, но не оба
+      this.options.logger?.debug?.(
+        `[RealtimeClient] Partial connection (PC: ${this.peerConnectionConnected}, DC: ${this.dataChannelReady}, DC state: ${dc?.readyState})`
+      );
+      // Остаемся в connecting, пока не будут готовы оба
+      if (this.connectionState !== 'connected') {
+        this.setConnectionState('connecting');
+      }
+    }
+  }
+
   setTokenProvider(tp: TokenProvider) {
     if (typeof tp !== 'function')
       throw new Error('setTokenProvider: invalid tokenProvider');
@@ -155,6 +201,7 @@ export class RealtimeClientClass {
   private setConnectionState(state: ConnectionState) {
     if (this.connectionState !== state) {
       this.connectionState = state;
+      this.options.logger?.debug?.(`[RealtimeClient] Status changed: ${state}`);
       this.connectionListeners.forEach((listener) => listener(state));
     }
   }
@@ -165,6 +212,20 @@ export class RealtimeClientClass {
 
   public getStatus() {
     return this.connectionState;
+  }
+
+  /**
+   * Возвращает true только если и PeerConnection и DataChannel полностью готовы
+   */
+  public isFullyConnected(): boolean {
+    const dc = this.dataChannelManager.getDataChannel();
+    return (
+      this.connectionState === 'connected' &&
+      this.peerConnectionConnected &&
+      this.dataChannelReady &&
+      !!dc &&
+      dc.readyState === 'open'
+    );
   }
 
   public onConnectionStateChange(listener: ConnectionListener) {
@@ -214,6 +275,9 @@ export class RealtimeClientClass {
   }
 
   private preConnectCleanup() {
+    this.peerConnectionConnected = false;
+    this.dataChannelReady = false;
+
     try {
       this.dataChannelManager.close();
     } catch {}
@@ -238,13 +302,12 @@ export class RealtimeClientClass {
     }
   }
 
-  // В RealtimeClientClass.ts
   async enableMicrophone() {
     try {
       const pc = this.peerConnectionManager.getPeerConnection();
       if (!pc) throw new Error('PeerConnection not created');
 
-      const stream = await this.mediaManager.getUserMedia(); // дергает mediaDevices.getUserMedia
+      const stream = await this.mediaManager.getUserMedia();
       this.mediaManager.addLocalStreamToPeerConnection(pc, stream);
       try {
         const txs = (pc as any).getTransceivers?.() || [];
@@ -265,7 +328,6 @@ export class RealtimeClientClass {
         }
       } catch {}
 
-      // 3) Ре-негациируем (offer/answer)
       const offer = await this.peerConnectionManager.createOffer();
       await this.peerConnectionManager.setLocalDescription(offer);
       await this.peerConnectionManager.waitForIceGathering();
@@ -283,12 +345,12 @@ export class RealtimeClientClass {
       throw e;
     }
   }
+
   public async disableMicrophone() {
     try {
       const pc = this.peerConnectionManager.getPeerConnection();
       if (!pc) throw new Error('PeerConnection not created');
 
-      // 1) остановим локальные аудиотреки
       const local = this.mediaManager.getLocalStream();
       if (local?.getAudioTracks) {
         local.getAudioTracks().forEach((t: any) => {
@@ -298,7 +360,6 @@ export class RealtimeClientClass {
         });
       }
 
-      // 2) переведём аудио трансивер в recvonly и отцепим track
       try {
         const txs = (pc as any).getTransceivers?.() || [];
         const audioTx = txs.find(
@@ -319,7 +380,6 @@ export class RealtimeClientClass {
         }
       } catch {}
 
-      // 3) ре-негациация
       const offer = await this.peerConnectionManager.createOffer();
       await this.peerConnectionManager.setLocalDescription(offer);
       await this.peerConnectionManager.waitForIceGathering();
@@ -327,7 +387,6 @@ export class RealtimeClientClass {
       const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
       await this.peerConnectionManager.setRemoteDescription(answer);
 
-      // 4) подчистим ссылку на локальный stream
       this.mediaManager.stopLocalStream();
 
       this.options.logger?.info?.(
@@ -338,6 +397,7 @@ export class RealtimeClientClass {
       throw e;
     }
   }
+
   async connect() {
     if (this.connecting) {
       this.errorHandler.handle(
@@ -353,8 +413,6 @@ export class RealtimeClientClass {
 
     try {
       this.setConnectionState('connecting');
-
-      // Закрываем старое
       this.preConnectCleanup();
 
       if (this.chatStore && !this.chatWired) {
@@ -363,7 +421,6 @@ export class RealtimeClientClass {
 
       this.assertNotAborted(mySeq);
 
-      // 1) Token
       let ephemeralKey: string;
       try {
         const fn = this.options.tokenProvider;
@@ -379,7 +436,6 @@ export class RealtimeClientClass {
 
       this.assertNotAborted(mySeq);
 
-      // ✅ 2) СНАЧАЛА проверяем микрофон (ДО создания PeerConnection!)
       const wantsAudioModality =
         Array.isArray(this.options.session?.modalities) &&
         this.options.session!.modalities!.includes('audio');
@@ -393,7 +449,6 @@ export class RealtimeClientClass {
       let needsRecvOnlyTransceiver = false;
 
       if (shouldTryMic) {
-        // Пытаемся получить доступ к микрофону ДО создания PeerConnection
         try {
           localStream = await this.mediaManager.getUserMedia();
           this.assertNotAborted(mySeq);
@@ -406,13 +461,11 @@ export class RealtimeClientClass {
             e.message || e
           );
 
-          // Если allowConnectWithoutMic=false — это критическая ошибка
           if (this.options.allowConnectWithoutMic === false) {
             this.errorHandler.handle('get_user_media', e, 'critical', false);
             throw e;
           }
 
-          // ✅ Иначе это warning - продолжим с recvonly
           this.errorHandler.handle('get_user_media', e, 'warning', true, {
             reason: 'Will use recvonly transceiver as fallback',
             allowConnectWithoutMic: true,
@@ -421,7 +474,6 @@ export class RealtimeClientClass {
           needsRecvOnlyTransceiver = true;
         }
       } else {
-        // Текстовый режим - не нужен микрофон
         this.options.logger?.info?.(
           '[RealtimeClient] 📝 Text mode - no microphone needed'
         );
@@ -430,23 +482,17 @@ export class RealtimeClientClass {
 
       this.assertNotAborted(mySeq);
 
-      // ✅ 3) Теперь создаем PeerConnection (после проверки микрофона)
       const pc = this.peerConnectionManager.create();
-
       this.assertNotAborted(mySeq);
 
-      // 4) Remote stream
       this.mediaManager.setupRemoteStream(pc);
 
-      // 5) Добавляем треки или transceiver
       if (localStream) {
-        // Есть микрофон - добавляем треки
         this.mediaManager.addLocalStreamToPeerConnection(pc, localStream);
         this.options.logger?.info?.(
           '[RealtimeClient] 🎤 Local microphone stream added to PeerConnection'
         );
       } else if (needsRecvOnlyTransceiver) {
-        // Нет микрофона - добавляем recvonly transceiver
         try {
           // @ts-ignore
           if (typeof pc.addTransceiver === 'function') {
@@ -462,7 +508,6 @@ export class RealtimeClientClass {
             );
           }
         } catch (e2: any) {
-          // Не критично если transceiver не добавился
           this.errorHandler.handle('ios_transceiver', e2, 'info', true);
           this.options.logger?.warn?.(
             '[RealtimeClient] ⚠️ Could not add transceiver:',
@@ -473,26 +518,21 @@ export class RealtimeClientClass {
 
       this.assertNotAborted(mySeq);
 
-      // 6) DataChannel
       this.dataChannelManager.create(pc, async (evt) => {
         await this.eventRouter.processIncomingMessage(evt);
       });
 
-      // 7) Offer
       const offer = await this.peerConnectionManager.createOffer();
       await this.peerConnectionManager.setLocalDescription(offer);
-
-      // 8) ICE
       await this.peerConnectionManager.waitForIceGathering();
 
       this.assertNotAborted(mySeq);
 
-      // 9) SDP exchange
       const answer = await this.apiClient.postSDP(offer.sdp, ephemeralKey);
       await this.peerConnectionManager.setRemoteDescription(answer);
 
       this.options.logger?.info?.(
-        '[RealtimeClient] 🎉 Connection established successfully'
+        '[RealtimeClient] 🎉 Connection process completed'
       );
     } catch (e: any) {
       if (e?.__ABORT__ || e?.name === 'AbortError') {
@@ -520,7 +560,6 @@ export class RealtimeClientClass {
     if (this.disconnecting) return;
     this.disconnecting = true;
 
-    // инвалидируем текущий connect
     this.connectSeq++;
 
     try {
@@ -539,6 +578,8 @@ export class RealtimeClientClass {
         this.eventRouter.cleanup();
       } catch {}
 
+      this.peerConnectionConnected = false;
+      this.dataChannelReady = false;
       this.chatWired = false;
 
       if (
@@ -568,10 +609,6 @@ export class RealtimeClientClass {
     }
   }
 
-  // ========================================
-  // НИЗКОУРОВНЕВЫЕ МЕТОДЫ (без проверок)
-  // ========================================
-
   async sendRaw(event: any): Promise<void> {
     return this.messageSender.sendRaw(event);
   }
@@ -593,10 +630,6 @@ export class RealtimeClientClass {
   sendToolOutput(call_id: string, output: any) {
     this.messageSender.sendToolOutput(call_id, output);
   }
-
-  // ========================================
-  // ГЕТТЕРЫ
-  // ========================================
 
   getPeerConnection() {
     return this.peerConnectionManager.getPeerConnection();
@@ -635,6 +668,6 @@ export class RealtimeClientClass {
   }
 
   isConnected() {
-    return this.connectionState === 'connected';
+    return this.isFullyConnected();
   }
 }

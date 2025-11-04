@@ -191,10 +191,6 @@ export type RealTimeClientProps = RealtimeSuccessCallbacks &
     autoConnect?: boolean;
     attachChat?: boolean;
 
-    // Режимы
-    initialMode?: ChatMode;
-    onModeChange?: (mode: ChatMode) => void;
-
     allowConnectWithoutMic?: boolean;
 
     children?:
@@ -204,5 +200,5 @@ export type RealTimeClientProps = RealtimeSuccessCallbacks &
 
 export type CoreConfig = Omit<
   RealTimeClientProps,
-  'autoConnect' | 'attachChat' | 'children' | 'initialMode' | 'onModeChange'
+  'autoConnect' | 'attachChat' | 'children'
 >;
