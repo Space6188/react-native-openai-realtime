@@ -5,7 +5,7 @@ import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export const useSessionOptions = (client: any) => {
+export const useSessionOptions = (client: RealtimeClientClass) => {
   const clientRef = useRef<RealtimeClientClass>(client);
   const lastResponseIdRef = useRef<string | null>(null);
   const [mode, setMode] = useState<'text' | 'voice'>('text');
@@ -19,6 +19,7 @@ export const useSessionOptions = (client: any) => {
 
   useEffect(() => {
     // const unsubscribe = subscribeToAssistantEvents(() => restartSpeakerRoute());
+    setMicrophoneEnabled(false);
     const unsubscribe = subscribeToAssistantEvents();
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,7 +63,7 @@ export const useSessionOptions = (client: any) => {
         return;
       }
 
-      const localStream = clientRef.current.getLocalStream?.();
+      const localStream = clientRefCurrent.getLocalStream?.();
       if (localStream) {
         console.log('🎤 localStream:', localStream);
         localStream.getAudioTracks().forEach((track: any) => {
@@ -77,12 +78,6 @@ export const useSessionOptions = (client: any) => {
       console.warn('⚠️ setMicrophoneEnabled failed:', e);
     }
   }, []);
-
-  useEffect(() => {
-    if (client && client.getStatus() === 'connected' && mode === 'text') {
-      setMicrophoneEnabled(false);
-    }
-  }, [client, mode, setMicrophoneEnabled]);
 
   const restartSpeakerRoute = useCallback(async () => {
     try {
@@ -125,7 +120,8 @@ export const useSessionOptions = (client: any) => {
         } catch {}
       };
     },
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setRemoteTracksEnabled]
   );
 
   const cancelAssistantNow = useCallback(
@@ -152,6 +148,7 @@ export const useSessionOptions = (client: any) => {
         onFail?.(e);
       }
     },
+
     [setRemoteTracksEnabled, setMicrophoneEnabled]
   );
 
@@ -174,7 +171,8 @@ export const useSessionOptions = (client: any) => {
     } catch {
       throw new Error('Failed to enforce text session');
     }
-  }, [setRemoteTracksEnabled, setMicrophoneEnabled, cancelAssistantNow]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setRemoteTracksEnabled]);
 
   const enforceVoiceSession = useCallback(async () => {
     try {
@@ -197,7 +195,8 @@ export const useSessionOptions = (client: any) => {
     } catch {
       throw new Error('Failed to enforce voice session');
     }
-  }, [setRemoteTracksEnabled, setMicrophoneEnabled, restartSpeakerRoute]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setRemoteTracksEnabled]);
 
   const initSession = async (newMode: 'text' | 'voice') => {
     setIsModeReady('connecting');
