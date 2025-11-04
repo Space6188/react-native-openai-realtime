@@ -1,117 +1,127 @@
-// hooks/useSessionOptions.ts
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import InCallManager from 'react-native-incall-manager';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-interface UseSessionOptionsParams {
-  client: any;
-}
-
-export const useSessionOptions = ({ client }: UseSessionOptionsParams) => {
+export const useSessionOptions = (client: any) => {
   const clientRef = useRef(client);
   const lastResponseIdRef = useRef<string | null>(null);
+  const [mode, setMode] = useState<'text' | 'voice'>('text');
+  const [isModeReady, setIsModeReady] = useState<
+    'idle' | 'connecting' | 'connected' | 'disconnected'
+  >('idle');
 
-  // Синхронизация refs
   useEffect(() => {
     clientRef.current = client;
   }, [client]);
 
-  // Управление удалёнными треками
+  useEffect(() => {
+    const unsubscribe = subscribeToAssistantEvents(() => restartSpeakerRoute());
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const waitUntilDataChannelOpen = useCallback(async (timeoutMs = 5000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const dc = clientRef.current?.getDataChannel?.();
+        if (dc && dc.readyState === 'open') {
+          return true;
+        }
+      } catch {}
+      await delay(100);
+    }
+    return false;
+  }, []);
+
   const setRemoteTracksEnabled = useCallback((enabled: boolean) => {
     try {
       const remote = clientRef.current?.getRemoteStream?.();
-      remote?.getAudioTracks?.().forEach((t: any) => {
-        t.enabled = enabled;
-      });
+      if (remote && typeof remote.getAudioTracks === 'function') {
+        remote.getAudioTracks().forEach((t: any) => {
+          t.enabled = enabled;
+        });
+      }
     } catch (e) {
       console.warn('⚠️ setRemoteTracksEnabled failed:', e);
     }
   }, []);
 
-  // ✅ Подписка на события ассистента (возвращает cleanup функцию)
-  const subscribeToAssistantEvents = useCallback(() => {
-    if (!clientRef.current?.on) return () => {};
-
-    const off1 = clientRef.current.on(
-      'assistant:response_started',
-      ({ responseId }: any) => {
-        lastResponseIdRef.current = responseId;
-        setRemoteTracksEnabled(true);
-        console.log('🎤 Assistant started:', responseId);
-      }
-    );
-
-    const off2 = clientRef.current.on(
-      'assistant:completed',
-      ({ responseId }: any) => {
-        if (lastResponseIdRef.current === responseId) {
-          lastResponseIdRef.current = null;
-          console.log('✅ Assistant completed:', responseId);
-        }
-      }
-    );
-
-    return () => {
-      try {
-        off1?.();
-        off2?.();
-      } catch {}
-    };
-  }, [setRemoteTracksEnabled]);
-
-  // Отмена ассистента
-  const cancelAssistant = useCallback(async () => {
+  const restartSpeakerRoute = useCallback(async () => {
     try {
-      const dc = clientRef.current?.getDataChannel?.();
-      if (!dc || dc.readyState !== 'open') {
-        console.warn('⚠️ DataChannel not ready for cancel');
-        return;
-      }
+      InCallManager.start({ media: 'audio', auto: false, ringback: '' });
+      InCallManager.setSpeakerphoneOn(true);
+      InCallManager.setForceSpeakerphoneOn(true);
+    } catch (e) {
+      console.warn('⚠️ restartSpeakerRoute failed:', e);
+    }
+  }, []);
 
-      const rid = lastResponseIdRef.current ?? undefined;
+  const subscribeToAssistantEvents = useCallback(
+    (onAssistantStarted?: () => void) => {
+      if (!clientRef.current?.on) return () => {};
 
-      // 1. Остановка ответа
+      const off1 = clientRef.current.on(
+        'assistant:response_started',
+        ({ responseId }: any) => {
+          lastResponseIdRef.current = responseId;
+          setRemoteTracksEnabled(true);
+          onAssistantStarted?.();
+          console.log('🎤 Assistant started:', responseId);
+        }
+      );
+
+      const off2 = clientRef.current.on(
+        'assistant:completed',
+        ({ responseId }: any) => {
+          if (lastResponseIdRef.current === responseId) {
+            lastResponseIdRef.current = null;
+            console.log('✅ Assistant completed:', responseId);
+          }
+        }
+      );
+
+      return () => {
+        try {
+          off1?.();
+          off2?.();
+        } catch {}
+      };
+    },
+    [setRemoteTracksEnabled]
+  );
+
+  const cancelAssistantNow = useCallback(
+    async (onComplete?: () => void, onFail?: (err: any) => void) => {
       try {
-        await clientRef.current?.sendRaw({
+        const chan = (clientRef.current as any)?.getDataChannel?.();
+        if (!chan || chan.readyState !== 'open') return;
+
+        const rid = lastResponseIdRef.current ?? undefined;
+
+        InCallManager.stop();
+        await (clientRef.current as any)?.sendRaw({
           type: 'response.cancel',
           ...(rid ? { response_id: rid } : {}),
         });
-        console.log('✅ response.cancel sent');
-      } catch (e) {
-        console.warn('⚠️ response.cancel failed:', e);
-      }
-
-      // 2. Очистка буфера
-      try {
-        await clientRef.current?.sendRaw({
-          type: 'input_audio_buffer.clear',
+        await (clientRef.current as any)?.sendRaw({
+          type: 'output_audio_buffer.clear',
         });
-        console.log('✅ input_audio_buffer.clear sent');
+        setRemoteTracksEnabled(false);
+
+        await delay(120);
+        onComplete?.();
       } catch (e) {
-        console.warn('⚠️ input_audio_buffer.clear failed:', e);
+        onFail?.(e);
       }
+    },
+    [setRemoteTracksEnabled]
+  );
 
-      // 3. Глушим треки
-      setRemoteTracksEnabled(false);
-      lastResponseIdRef.current = null;
-
-      await delay(120);
-      console.log('✅ Assistant cancelled');
-    } catch (e) {
-      console.error('❌ cancelAssistant error:', e);
-      throw e;
-    }
-  }, [setRemoteTracksEnabled]);
-
-  // Переключение в текстовый режим
   const enforceTextSession = useCallback(async () => {
     try {
-      const dc = clientRef.current?.getDataChannel?.();
-      if (!dc || dc.readyState !== 'open') {
-        console.warn('⚠️ DataChannel not ready');
-        return;
-      }
-
+      await cancelAssistantNow();
       await clientRef.current?.sendRaw({
         type: 'session.update',
         session: {
@@ -122,25 +132,17 @@ export const useSessionOptions = ({ client }: UseSessionOptionsParams) => {
           input_audio_transcription: null,
         },
       });
-
+      InCallManager.stop();
       setRemoteTracksEnabled(false);
-      console.log('✅ Text session enforced');
-    } catch (e) {
-      console.error('❌ enforceTextSession failed:', e);
-      throw e;
+    } catch {
+      throw new Error('Failed to enforce text session');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setRemoteTracksEnabled]);
 
-  // Переключение в голосовой режим
   const enforceVoiceSession = useCallback(async () => {
     try {
-      const dc = clientRef.current?.getDataChannel?.();
-      if (!dc || dc.readyState !== 'open') {
-        console.warn('⚠️ DataChannel not ready');
-        throw new Error('DataChannel not ready');
-      }
-
-      await clientRef.current?.sendRaw({
+      await (clientRef.current as any)?.sendRaw({
         type: 'session.update',
         session: {
           modalities: ['audio', 'text'],
@@ -153,90 +155,80 @@ export const useSessionOptions = ({ client }: UseSessionOptionsParams) => {
           input_audio_transcription: { model: 'whisper-1' },
         },
       });
-
-      await delay(300);
       setRemoteTracksEnabled(true);
-
-      console.log('✅ Voice session enforced');
-    } catch (e) {
-      console.error('❌ enforceVoiceSession failed:', e);
-      throw e;
+      await restartSpeakerRoute();
+    } catch {
+      throw new Error('Failed to enforce voice session');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setRemoteTracksEnabled]);
 
-  // Закрытие голосового режима
-  const closeVoiceMode = useCallback(async () => {
-    try {
-      // 1. Отменяем ассистента
-      await cancelAssistant();
-
-      // 2. Переводим в текстовый режим
-      await enforceTextSession();
-
-      console.log('✅ Voice mode closed');
-    } catch (e) {
-      console.error('❌ closeVoiceMode failed:', e);
-      throw e;
+  const initSession = async (newMode: 'text' | 'voice') => {
+    if (mode === newMode) {
+      setIsModeReady('connected');
+      return;
     }
-  }, [cancelAssistant, enforceTextSession]);
-
-  // Отправка текстового сообщения
-  const handleSendMessage = useCallback(
-    async (
-      text: string,
-      onComplete?: () => void,
-      onFail?: (err: any) => void
-    ) => {
-      if (!text.trim()) {
-        console.warn('⚠️ Empty message');
-        return;
+    setIsModeReady('connecting');
+    const dcOpened = await waitUntilDataChannelOpen(5000);
+    if (!dcOpened) {
+      throw new Error('DataChannel not open');
+    }
+    try {
+      if (newMode === 'text') {
+        await enforceTextSession();
+        setIsModeReady('connected');
+      } else {
+        await enforceVoiceSession();
+        setIsModeReady('connected');
       }
+      setMode(newMode);
+    } catch {
+      setIsModeReady('disconnected');
+      throw new Error('Failed to init session');
+    }
+  };
 
-      const dc = clientRef.current?.getDataChannel?.();
-      if (!dc || dc.readyState !== 'open') {
-        const error = 'DataChannel not open';
-        console.warn('⚠️', error);
-        onFail?.(error);
-        return;
-      }
+  const handleSendMessage = async (text: string) => {
+    if (!text.trim()) {
+      console.warn('⚠️ Empty message');
+      throw new Error('Empty message');
+    }
 
-      try {
-        // 1. Создаём message item
-        await clientRef.current?.sendRaw({
-          type: 'conversation.item.create',
-          item: {
-            type: 'message',
-            role: 'user',
-            content: [{ type: 'input_text', text }],
-          },
-        });
+    const dc = clientRef.current?.getDataChannel?.();
+    if (!dc || dc.readyState !== 'open') {
+      console.warn('⚠️ DataChannel not open');
+      throw new Error('DataChannel not open');
+    }
 
-        // 2. Запрашиваем ответ
-        await clientRef.current?.sendRaw({
-          type: 'response.create',
-          response: {
-            modalities: ['text'],
-            instructions: 'Ответь кратко и по делу.',
-          },
-        });
+    try {
+      await clientRef.current?.sendRaw({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text }],
+        },
+      });
 
-        console.log('✅ Message sent');
-        onComplete?.();
-      } catch (e) {
-        console.error('❌ handleSendMessage failed:', e);
-        onFail?.(e);
-      }
-    },
-    []
-  );
+      await clientRef.current?.sendRaw({
+        type: 'response.create',
+        response: {
+          modalities: ['text'],
+          instructions: 'Ответь кратко и по делу.',
+        },
+      });
+
+      console.log('✅ Message sent');
+    } catch {
+      throw new Error('Failed to send message');
+    }
+  };
 
   return {
-    cancelAssistant,
-    enforceTextSession,
-    enforceVoiceSession,
-    closeVoiceMode,
-    handleSendMessage,
-    setRemoteTracksEnabled,
     subscribeToAssistantEvents,
+    handleSendMessage,
+    initSession,
+    isModeReady,
+    mode,
   };
 };
