@@ -29,27 +29,56 @@ export function createDefaultRouter(
   functionArgsBuffer: Map<string, string>,
   sendRaw: (e: any) => void
 ) {
+  const responseCompletionState = new Map<
+    string,
+    {
+      textDone: boolean;
+      audioDone: boolean;
+      hasAudio: boolean; // Флаг: используется ли аудио в этом ответе
+    }
+  >();
+
+  const checkAndEmitCompletion = (responseId: string) => {
+    const state = responseCompletionState.get(responseId);
+    if (!state) return;
+
+    // Эмитим completed только когда:
+    // 1. Текст готов И (аудио готово ИЛИ аудио не используется)
+    const shouldComplete =
+      state.textDone && (state.audioDone || !state.hasAudio);
+
+    if (shouldComplete) {
+      responseCompletionState.delete(responseId);
+
+      const consumed = options.hooks?.onAssistantCompleted?.({
+        responseId,
+        status: 'done',
+      });
+
+      if (consumed !== 'consume') {
+        emit('assistant:completed', { responseId, status: 'done' });
+      }
+    }
+  };
+
   return async function route(msg: any) {
     const hooks = options.hooks;
     hooks?.onEvent?.(msg);
 
-    // ✅ ИСПРАВЛЕНО: Обработка создания пользовательского item
+    // Обработка создания пользовательского item
     if (msg.type === 'conversation.item.created') {
       const item = msg.item;
       const itemId = item?.id;
 
-      // User item
       if (item?.role === 'user' && itemId) {
         emit('user:item_started', { itemId });
 
-        // Если это текстовый ввод - сразу завершаем
         const typed = extractInputTextFromItem(item);
         if (typed && String(typed).trim()) {
           emit('user:completed', { itemId, transcript: String(typed) });
         }
       }
 
-      // Assistant item (для совместимости)
       if (item?.role === 'assistant' && itemId) {
         emit('assistant:item_started', { itemId });
       }
@@ -57,16 +86,40 @@ export function createDefaultRouter(
       return;
     }
 
-    // Ассистент начал ответ
     if (msg.type === 'response.created') {
       const responseId = msg.response?.id || msg.response_id;
       if (responseId) {
+        // Проверяем modalities из сессии или ответа
+        const modalities = msg.response?.modalities ||
+          options.session?.modalities || ['text'];
+        const hasAudio =
+          Array.isArray(modalities) && modalities.includes('audio');
+
+        responseCompletionState.set(responseId, {
+          textDone: false,
+          audioDone: !hasAudio, // Если аудио нет, считаем его сразу "завершенным"
+          hasAudio,
+        });
+
         emit('assistant:response_started', { responseId });
       }
       return;
     }
 
-    // ✅ ИСПРАВЛЕНО: Обработка ВСЕХ типов текстовых дельт от ассистента
+    if (
+      msg.type === 'response.audio.delta' ||
+      msg.type === 'output_audio_buffer.started'
+    ) {
+      const responseId = msg.response_id;
+      if (responseId && responseCompletionState.has(responseId)) {
+        const state = responseCompletionState.get(responseId)!;
+        state.hasAudio = true;
+        state.audioDone = false; // Сбрасываем, так как аудио началось
+      }
+      return;
+    }
+
+    // Текстовые дельты от ассистента
     if (msg.type === 'response.text.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
@@ -81,7 +134,6 @@ export function createDefaultRouter(
       return;
     }
 
-    // ✅ ДОБАВЛЕНО: response.output_item.text.delta
     if (msg.type === 'response.output_item.text.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
@@ -96,7 +148,6 @@ export function createDefaultRouter(
       return;
     }
 
-    // Для голосового режима - audio transcript
     if (msg.type === 'response.audio_transcript.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
@@ -115,7 +166,6 @@ export function createDefaultRouter(
       return;
     }
 
-    // ✅ ДОБАВЛЕНО: response.output_text.delta (альтернативный формат)
     if (msg.type === 'response.output_text.delta') {
       const responseId = msg.response_id;
       const delta = msg.delta || '';
@@ -130,7 +180,7 @@ export function createDefaultRouter(
       return;
     }
 
-    // Транскрипция пользователя (аудио → текст)
+    // Транскрипция пользователя
     if (msg.type === 'conversation.item.input_audio_transcription.delta') {
       const itemId = msg.item_id;
       const delta = msg.delta || '';
@@ -166,35 +216,68 @@ export function createDefaultRouter(
       return;
     }
 
-    // ✅ ИСПРАВЛЕНО: Завершение текстового ответа
-    if (msg.type === 'response.text.done') {
+    if (
+      msg.type === 'response.text.done' ||
+      msg.type === 'response.output_item.text.done' ||
+      msg.type === 'response.audio_transcript.done' ||
+      msg.type === 'response.output_text.done'
+    ) {
       const responseId = msg.response_id;
-      const consumed = hooks?.onAssistantCompleted?.({
-        responseId,
-        status: 'done',
-      });
-      if (consumed !== 'consume') {
-        emit('assistant:completed', { responseId, status: 'done' });
+
+      if (responseCompletionState.has(responseId)) {
+        const state = responseCompletionState.get(responseId)!;
+        state.textDone = true;
+        checkAndEmitCompletion(responseId);
+      } else {
+        // Если нет в state (старый response или что-то пошло не так) - эмитим как обычно
+        const consumed = hooks?.onAssistantCompleted?.({
+          responseId,
+          status: 'done',
+        });
+        if (consumed !== 'consume') {
+          emit('assistant:completed', { responseId, status: 'done' });
+        }
       }
       return;
     }
 
-    // ✅ ДОБАВЛЕНО: response.output_item.text.done
-    if (msg.type === 'response.output_item.text.done') {
+    if (msg.type === 'output_audio_buffer.stopped') {
       const responseId = msg.response_id;
-      const consumed = hooks?.onAssistantCompleted?.({
-        responseId,
-        status: 'done',
-      });
-      if (consumed !== 'consume') {
-        emit('assistant:completed', { responseId, status: 'done' });
+
+      if (responseId && responseCompletionState.has(responseId)) {
+        const state = responseCompletionState.get(responseId)!;
+        state.audioDone = true;
+        checkAndEmitCompletion(responseId);
       }
+
+      // Эмитим специальное событие для middleware
+      emit('output_audio_buffer.stopped', {});
       return;
     }
 
-    // Завершение/отмена ответа ассистента
+    if (msg.type === 'output_audio_buffer.cleared') {
+      const responseId = msg.response_id;
+
+      if (responseId && responseCompletionState.has(responseId)) {
+        const state = responseCompletionState.get(responseId)!;
+        state.audioDone = true;
+        checkAndEmitCompletion(responseId);
+      }
+
+      emit('output_audio_buffer.cleared', {});
+      return;
+    }
+
+    // Общие события завершения/отмены
     if (msg.type === 'response.done' || msg.type === 'response.completed') {
       const responseId = msg.response_id || msg.response?.id;
+
+      if (responseCompletionState.has(responseId)) {
+        // Форсируем завершение, даже если аудио не закончилось
+        // (response.done означает, что сервер закончил генерацию)
+        responseCompletionState.delete(responseId);
+      }
+
       const consumed = hooks?.onAssistantCompleted?.({
         responseId,
         status: 'done',
@@ -207,36 +290,14 @@ export function createDefaultRouter(
 
     if (msg.type === 'response.cancelled' || msg.type === 'response.canceled') {
       const responseId = msg.response_id || msg.response?.id;
+      responseCompletionState.delete(responseId); // Очищаем state
+
       const consumed = hooks?.onAssistantCompleted?.({
         responseId,
         status: 'canceled',
       });
       if (consumed !== 'consume') {
         emit('assistant:completed', { responseId, status: 'canceled' });
-      }
-      return;
-    }
-
-    if (msg.type === 'response.output_text.done') {
-      const responseId = msg.response_id || msg.response?.id;
-      const consumed = hooks?.onAssistantCompleted?.({
-        responseId,
-        status: 'done',
-      });
-      if (consumed !== 'consume') {
-        emit('assistant:completed', { responseId, status: 'done' });
-      }
-      return;
-    }
-
-    if (msg.type === 'response.audio_transcript.done') {
-      const responseId = msg.response_id;
-      const consumed = hooks?.onAssistantCompleted?.({
-        responseId,
-        status: 'done',
-      });
-      if (consumed !== 'consume') {
-        emit('assistant:completed', { responseId, status: 'done' });
       }
       return;
     }
@@ -285,15 +346,13 @@ export function createDefaultRouter(
       return;
     }
 
-    // ✅ ИСПРАВЛЕНО: Обработка серверных ошибок
+    // Серверные ошибки
     if (msg.type === 'error') {
       emit('error', { scope: 'server', error: msg.error });
-      // НЕ вызываем hooks.onError с серверной ошибкой - это вызовет проблемы
-      // hooks?.onError?.(msg.error);
       return;
     }
 
-    // ✅ ДОБАВЛЕНО: Логирование необработанных событий для отладки
+    // Логирование необработанных событий
     if (options.logger?.debug) {
       const knownTypes = [
         'session.created',
@@ -303,9 +362,9 @@ export function createDefaultRouter(
         'input_audio_buffer.speech_started',
         'input_audio_buffer.speech_stopped',
         'output_audio_buffer.started',
-        'output_audio_buffer.stopped',
-        'output_audio_buffer.cleared',
         'rate_limits.updated',
+        'response.audio.delta', // Добавлено
+        'response.audio.done', // Добавлено
       ];
       if (!knownTypes.includes(msg.type)) {
         options.logger.debug(`[Router] Unhandled event: ${msg.type}`, msg);

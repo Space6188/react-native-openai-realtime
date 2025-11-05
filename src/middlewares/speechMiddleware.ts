@@ -1,3 +1,4 @@
+// src/middlewares/speechActivityMiddleware.ts
 import type {
   MiddlewareCtx,
   SpeechActivityState,
@@ -71,13 +72,12 @@ class SpeechActivityStore {
 
 export const speechActivityStore = new SpeechActivityStore();
 export type SpeechActivityStoreType = typeof speechActivityStore;
-// Утилита: безопасное сравнение типа события
 
 export function createSpeechActivityMiddleware(store = speechActivityStore) {
   return ({ event }: MiddlewareCtx) => {
     const t = event?.type;
 
-    // Пользователь (как было)
+    // ========== ПОЛЬЗОВАТЕЛЬ ==========
     if (t === 'input_audio_buffer.speech_started' || t === 'speech_started') {
       store.setUserSpeaking(true);
       store.setAssistantSpeaking(false);
@@ -100,29 +100,45 @@ export function createSpeechActivityMiddleware(store = speechActivityStore) {
       store.setInputBuffered(false);
     }
 
-    // Ассистент (патч)
-    if (t === 'output_audio_buffer.started') {
+    // ========== АССИСТЕНТ ==========
+
+    // ✅ ИСПРАВЛЕНИЕ: Начало генерации ответа
+    if (t === 'response.created') {
+      // Не включаем speaking сразу - подождем пока не начнется реальное аудио
+      // store.setAssistantSpeaking(true); // ❌ Убрали преждевременную активацию
+    }
+
+    // ✅ ИСПРАВЛЕНИЕ: Начало воспроизведения аудио (РЕАЛЬНОЕ начало!)
+    if (t === 'output_audio_buffer.started' || t === 'response.audio.delta') {
       store.setOutputBuffered(true);
       store.setAssistantSpeaking(true);
       store.setInputBuffered(false);
       store.setUserSpeaking(false);
     }
-    // Патч: на .stopped и .cleared выключаем ассистентскую речь
-    if (
-      t === 'output_audio_buffer.stopped' ||
-      t === 'output_audio_buffer.cleared'
-    ) {
+
+    // ✅ ИСПРАВЛЕНИЕ: Остановка воспроизведения аудио (РЕАЛЬНЫЙ конец!)
+    // Это самое важное событие - оно означает что аудио ДЕЙСТВИТЕЛЬНО закончилось
+    if (t === 'output_audio_buffer.stopped') {
       store.setAssistantSpeaking(false);
       store.setOutputBuffered(false);
     }
 
-    // Патч: на ответ отменён — тоже гасим
+    // Очистка буфера (отмена)
+    if (t === 'output_audio_buffer.cleared') {
+      store.setAssistantSpeaking(false);
+      store.setOutputBuffered(false);
+    }
+
+    // ✅ ИСПРАВЛЕНИЕ: Отмена ответа
     if (t === 'response.canceled' || t === 'response.cancelled') {
       store.setAssistantSpeaking(false);
       store.setOutputBuffered(false);
     }
 
+    // ⚠️ НЕ реагируем на response.done / response.text.done / response.audio_transcript.done
+    // потому что они не означают завершение ВОСПРОИЗВЕДЕНИЯ аудио!
+    // Воспроизведение продолжается пока не придет output_audio_buffer.stopped
+
     return;
   };
 }
-// React-хук: подписка на store

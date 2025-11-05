@@ -28,7 +28,6 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
   useEffect(() => {
     if (!client) return;
 
-    // server-mode: активируем активность на дельты пользователя
     let unsubDelta: (() => void) | null = null;
     let unsubCompleted: (() => void) | null = null;
     let silenceTimer: any = null;
@@ -51,7 +50,6 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
       });
     }
 
-    // stats-mode: опрашиваем audioLevel локального sender'а
     let poll: any = null;
     const enableStats = mode !== 'server'; // stats | auto
     if (enableStats) {
@@ -65,7 +63,6 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
           );
           if (!audioSender || !audioSender.getStats) return;
 
-          // заодно проверим "идёт ли захват"
           const localStream = client.getLocalStream?.();
           const capturing =
             !!localStream &&
@@ -103,7 +100,6 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
             setIsMicActive(lvl > threshold);
           }
           if (mode === 'auto') {
-            // если не было server-дэлт давно — ориентируемся на stats
             if (Date.now() - lastHeardRef.current > 2 * silenceMs) {
               setIsMicActive(lvl > threshold);
             }
