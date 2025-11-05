@@ -1,6 +1,7 @@
+// hooks/useSessionOptions.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import InCallManager from 'react-native-incall-manager';
-import { RealtimeClientClass } from '@react-native-openai-realtime/components';
+import { RealtimeClientClass } from 'react-native-openai-realtime';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -17,7 +18,7 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
   }, [client]);
 
   useEffect(() => {
-    const unsubscribe = subscribeToAssistantEvents(() => restartSpeakerRoute());
+    const unsubscribe = subscribeToAssistantEvents();
     return () => unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -95,8 +96,8 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         'assistant:response_started',
         ({ responseId }: any) => {
           lastResponseIdRef.current = responseId;
-          setRemoteTracksEnabled(true);
-          onAssistantStarted?.();
+          // setRemoteTracksEnabled(true);
+          // onAssistantStarted?.();
           console.log('🎤 Assistant started:', responseId);
         }
       );
@@ -118,6 +119,7 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         } catch {}
       };
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [setRemoteTracksEnabled]
   );
 
@@ -153,15 +155,10 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
       console.log('📝 Switching to TEXT mode...');
 
       await cancelAssistantNow();
-
-      // 2. Отключаем треки
       setRemoteTracksEnabled(false);
       setMicrophoneEnabled(false);
-
-      // 3. Останавливаем InCallManager
       InCallManager.stop();
 
-      // 4. Обновляем сессию на текстовый режим
       await clientRef.current?.sendRaw({
         type: 'session.update',
         session: {
@@ -185,28 +182,25 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
       await clientRef.current?.sendRaw({
         type: 'session.update',
         session: {
-          modalities: ['audio', 'text'],
+          model: 'gpt-4o-realtime-preview-2024-12-17',
+          voice: 'shimmer',
+          modalities: ['text', 'audio'],
           turn_detection: {
             type: 'server_vad',
-            threshold: 0.7,
-            prefix_padding_ms: 500,
+            threshold: 0.6,
+            prefix_padding_ms: 200,
             silence_duration_ms: 1200,
           },
-          input_audio_transcription: {
-            model: 'whisper-1',
-          },
+          input_audio_transcription: { model: 'whisper-1' },
         },
       });
 
       console.log('✅ Session updated to voice mode');
 
-      // 2. Ждем немного, чтобы сервер применил изменения
       await delay(300);
 
-      // 3. Запускаем speaker route
       await restartSpeakerRoute();
 
-      // 4. Включаем треки
       setRemoteTracksEnabled(true);
       setMicrophoneEnabled(true);
 
