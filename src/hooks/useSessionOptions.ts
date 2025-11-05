@@ -1,7 +1,7 @@
 // hooks/useSessionOptions.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import InCallManager from 'react-native-incall-manager';
-import { RealtimeClientClass } from 'react-native-openai-realtime';
+import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -97,7 +97,7 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         ({ responseId }: any) => {
           lastResponseIdRef.current = responseId;
           // setRemoteTracksEnabled(true);
-          // onAssistantStarted?.();
+          onAssistantStarted?.();
           console.log('🎤 Assistant started:', responseId);
         }
       );
