@@ -6,10 +6,10 @@ type Mode = 'server' | 'stats' | 'auto';
 
 export type UseMicrophoneActivityOptions = {
   client?: RealtimeClientClass | null;
-  mode?: Mode; // default: 'auto'
-  silenceMs?: number; // таймаут без "дельт", после которого считаем тишину (по server-событиям)
-  levelThreshold?: number; // порог срабатывания для stats-режима
-  pollInterval?: number; // период опроса getStats
+  mode?: Mode;
+  silenceMs?: number;
+  levelThreshold?: number;
+  pollInterval?: number;
 };
 
 export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
@@ -17,6 +17,7 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
   const client = opts?.client ?? (ctxClient as RealtimeClientClass | null);
   const [isMicActive, setIsMicActive] = useState(false);
   const [level, setLevel] = useState(0);
+  const [remoteLevel, setRemoteLevel] = useState(0); // уровень собеседника
   const [isCapturing, setIsCapturing] = useState(false);
 
   const lastHeardRef = useRef<number>(0);
@@ -51,18 +52,14 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
     }
 
     let poll: any = null;
-    const enableStats = mode !== 'server'; // stats | auto
+    const enableStats = mode !== 'server';
     if (enableStats) {
       poll = setInterval(async () => {
         try {
           const pc = client.getPeerConnection?.();
-          if (!pc || !pc.getSenders) return;
-          const senders = pc.getSenders();
-          const audioSender = senders.find(
-            (s: any) => s.track && s.track.kind === 'audio'
-          );
-          if (!audioSender || !audioSender.getStats) return;
+          if (!pc) return;
 
+          // Проверка захвата аудио
           const localStream = client.getLocalStream?.();
           const capturing =
             !!localStream &&
@@ -72,36 +69,38 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
               .some((t: any) => t.enabled && t.readyState === 'live');
           setIsCapturing(capturing);
 
-          const stats = await audioSender.getStats();
-          let lvl = 0;
-          stats.forEach((r: any) => {
-            if (r.type === 'media-source' && typeof r.audioLevel === 'number') {
-              lvl = Math.max(lvl, r.audioLevel);
-            }
-            if (r.type === 'track' && typeof r.audioLevel === 'number') {
-              lvl = Math.max(lvl, r.audioLevel);
-            }
-            if (
-              typeof r.totalAudioEnergy === 'number' &&
-              typeof r.totalSamplesDuration === 'number' &&
-              r.totalSamplesDuration > 0
-            ) {
-              const energy = r.totalAudioEnergy / r.totalSamplesDuration;
-              lvl = Math.max(lvl, Math.min(1, Math.sqrt(energy)));
-            }
-            if (typeof r.audioInputLevel === 'number') {
-              // старые реализации: 0..32767
-              lvl = Math.max(lvl, Math.min(1, r.audioInputLevel / 32767));
-            }
-          });
-          setLevel(lvl);
+          // Уровень исходящего аудио (микрофон)
+          if (pc.getSenders) {
+            const senders = pc.getSenders();
+            const audioSender = senders.find(
+              (s: any) => s.track && s.track.kind === 'audio'
+            );
+            if (audioSender && audioSender.getStats) {
+              const stats = await audioSender.getStats();
+              const lvl = extractAudioLevel(stats);
+              setLevel(lvl);
 
-          if (mode === 'stats') {
-            setIsMicActive(lvl > threshold);
+              if (mode === 'stats') {
+                setIsMicActive(lvl > threshold);
+              }
+              if (mode === 'auto') {
+                if (Date.now() - lastHeardRef.current > 2 * silenceMs) {
+                  setIsMicActive(lvl > threshold);
+                }
+              }
+            }
           }
-          if (mode === 'auto') {
-            if (Date.now() - lastHeardRef.current > 2 * silenceMs) {
-              setIsMicActive(lvl > threshold);
+
+          // Уровень входящего аудио (собеседник)
+          if (pc.getReceivers) {
+            const receivers = pc.getReceivers();
+            const audioReceiver = receivers.find(
+              (r: any) => r.track && r.track.kind === 'audio'
+            );
+            if (audioReceiver && audioReceiver.getStats) {
+              const stats = await audioReceiver.getStats();
+              const lvl = extractAudioLevel(stats);
+              setRemoteLevel(lvl);
             }
           }
         } catch {
@@ -109,7 +108,6 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
         }
       }, pollInterval);
     } else {
-      // хотя бы проверим isCapturing
       const local = client.getLocalStream?.();
       const capturing =
         !!local &&
@@ -128,5 +126,37 @@ export function useMicrophoneActivity(opts?: UseMicrophoneActivityOptions) {
     };
   }, [client, mode, silenceMs, threshold, pollInterval]);
 
-  return { isMicActive, level, isCapturing };
+  return { isMicActive, level, remoteLevel, isCapturing };
+}
+
+// Вспомогательная функция для извлечения уровня из статистики
+function extractAudioLevel(stats: RTCStatsReport): number {
+  let lvl = 0;
+  stats.forEach((r: any) => {
+    // Уровень аудио в media-source или track
+    if (r.type === 'media-source' && typeof r.audioLevel === 'number') {
+      lvl = Math.max(lvl, r.audioLevel);
+    }
+    if (r.type === 'track' && typeof r.audioLevel === 'number') {
+      lvl = Math.max(lvl, r.audioLevel);
+    }
+    // Энергия аудио
+    if (
+      typeof r.totalAudioEnergy === 'number' &&
+      typeof r.totalSamplesDuration === 'number' &&
+      r.totalSamplesDuration > 0
+    ) {
+      const energy = r.totalAudioEnergy / r.totalSamplesDuration;
+      lvl = Math.max(lvl, Math.min(1, Math.sqrt(energy)));
+    }
+    // Старые реализации
+    if (typeof r.audioInputLevel === 'number') {
+      lvl = Math.max(lvl, Math.min(1, r.audioInputLevel / 32767));
+    }
+    // Для входящего аудио может быть audioOutputLevel
+    if (typeof r.audioOutputLevel === 'number') {
+      lvl = Math.max(lvl, Math.min(1, r.audioOutputLevel / 32767));
+    }
+  });
+  return lvl;
 }
