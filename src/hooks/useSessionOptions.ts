@@ -1,37 +1,37 @@
-// hooks/useSessionOptions.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import InCallManager from 'react-native-incall-manager';
 import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export const useSessionOptions = (client: RealtimeClientClass) => {
-  const clientRef = useRef<RealtimeClientClass>(client);
+export const useSessionOptions = (client: RealtimeClientClass | null) => {
+  const clientRef = useRef<RealtimeClientClass | null>(client);
   const lastResponseIdRef = useRef<string | null>(null);
+  const initInProgressRef = useRef(false);
+
   const [mode, setMode] = useState<'text' | 'voice'>('text');
   const [isModeReady, setIsModeReady] = useState<
     'idle' | 'connecting' | 'connected' | 'disconnected'
   >('idle');
+  const [clientReady, setClientReady] = useState<boolean>(!!client);
 
   useEffect(() => {
     clientRef.current = client;
+    setClientReady(!!client);
   }, [client]);
-
-  useEffect(() => {
-    const unsubscribe = subscribeToAssistantEvents();
-    return () => unsubscribe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const waitUntilDataChannelOpen = useCallback(async (timeoutMs = 5000) => {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      try {
-        const dc = clientRef.current?.getDataChannel?.();
-        if (dc && dc.readyState === 'open') {
-          return true;
-        }
-      } catch {}
+      const c = clientRef.current;
+      if (c && typeof c.getDataChannel === 'function') {
+        try {
+          const dc = c.getDataChannel();
+          if (dc && dc.readyState === 'open') {
+            return true;
+          }
+        } catch {}
+      }
       await delay(100);
     }
     return false;
@@ -46,35 +46,24 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         });
       }
     } catch (e) {
-      console.warn('⚠️ setRemoteTracksEnabled failed:', e);
+      throw new Error('Failed to set remote tracks enabled' + e);
     }
   }, []);
 
   const setMicrophoneEnabled = useCallback((enabled: boolean) => {
     try {
-      const clientRefCurrent = clientRef.current;
-      if (
-        !clientRefCurrent ||
-        typeof clientRefCurrent.getLocalStream !== 'function'
-      ) {
-        console.warn('⚠️ Client or getLocalStream not available');
-        return;
-      }
+      const c = clientRef.current;
+      if (!c || typeof c.getLocalStream !== 'function') return;
 
-      const localStream = clientRefCurrent.getLocalStream?.();
+      const localStream = c.getLocalStream?.();
       if (localStream) {
-        console.log('🎤 localStream:', localStream);
         localStream.getAudioTracks().forEach((track: any) => {
           track.enabled = enabled;
-          console.log(
-            `🎤 Microphone track ${enabled ? 'enabled' : 'disabled'}`
-          );
         });
-      } else {
-        console.warn('⚠️ No local stream available');
       }
     } catch (e) {
-      console.warn('⚠️ setMicrophoneEnabled failed:', e);
+      // no-op
+      throw new Error('Failed to set microphone enabled' + e);
     }
   }, []);
 
@@ -84,30 +73,30 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
       InCallManager.setSpeakerphoneOn(true);
       InCallManager.setForceSpeakerphoneOn(true);
     } catch (e) {
-      console.warn('⚠️ restartSpeakerRoute failed:', e);
+      // no-op
+      throw new Error('Failed to restart speaker route' + e);
     }
   }, []);
 
+  // Возвращаем функция подписки, без автоподписки по mount
   const subscribeToAssistantEvents = useCallback(
     (onAssistantStarted?: () => void) => {
-      if (!clientRef.current?.on) return () => {};
+      const c = clientRef.current;
+      if (!c || typeof (c as any).on !== 'function') return () => {};
 
-      const off1 = clientRef.current.on(
+      const off1 = (c as any).on(
         'assistant:response_started',
         ({ responseId }: any) => {
           lastResponseIdRef.current = responseId;
-          // setRemoteTracksEnabled(true);
           onAssistantStarted?.();
-          console.log('🎤 Assistant started:', responseId);
         }
       );
 
-      const off2 = clientRef.current.on(
+      const off2 = (c as any).on(
         'assistant:completed',
         ({ responseId }: any) => {
           if (lastResponseIdRef.current === responseId) {
             lastResponseIdRef.current = null;
-            console.log('✅ Assistant completed:', responseId);
           }
         }
       );
@@ -119,26 +108,27 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         } catch {}
       };
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [setRemoteTracksEnabled]
+    []
   );
 
   const cancelAssistantNow = useCallback(
     async (onComplete?: () => void, onFail?: (err: any) => void) => {
       try {
-        const chan = (clientRef.current as any)?.getDataChannel?.();
+        const c = clientRef.current as any;
+        const chan = c?.getDataChannel?.();
         if (!chan || chan.readyState !== 'open') return;
 
         const rid = lastResponseIdRef.current ?? undefined;
 
         InCallManager.stop();
-        await (clientRef.current as any)?.sendRaw({
+        await c?.sendRaw({
           type: 'response.cancel',
           ...(rid ? { response_id: rid } : {}),
         });
-        await (clientRef.current as any)?.sendRaw({
+        await c?.sendRaw({
           type: 'output_audio_buffer.clear',
         });
+
         setRemoteTracksEnabled(false);
         setMicrophoneEnabled(false);
         await delay(120);
@@ -150,38 +140,45 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
     [setRemoteTracksEnabled, setMicrophoneEnabled]
   );
 
-  const enforceTextSession = useCallback(async () => {
-    try {
-      console.log('📝 Switching to TEXT mode...');
+  const enforceTextSession = useCallback(
+    async (customParams?: Partial<any>) => {
+      const c = clientRef.current as any;
+      if (!c) throw new Error('Client not ready');
 
-      await cancelAssistantNow();
-      setRemoteTracksEnabled(false);
-      setMicrophoneEnabled(false);
-      InCallManager.stop();
+      try {
+        await cancelAssistantNow();
 
-      await clientRef.current?.sendRaw({
-        type: 'session.update',
-        session: {
+        setRemoteTracksEnabled(false);
+        setMicrophoneEnabled(false);
+        InCallManager.stop();
+
+        const defaultTextParams = {
           modalities: ['text'],
           turn_detection: null,
           input_audio_transcription: null,
-        },
-      });
+        };
 
-      console.log('✅ TEXT mode activated');
-    } catch (e) {
-      console.error('❌ Failed to enforce text session:', e);
-      throw new Error('Failed to enforce text session');
-    }
-  }, [cancelAssistantNow, setRemoteTracksEnabled, setMicrophoneEnabled]);
+        await c.sendRaw({
+          type: 'session.update',
+          session: {
+            ...defaultTextParams,
+            ...customParams,
+          },
+        });
+      } catch (e) {
+        throw new Error('Failed to enforce text session' + e);
+      }
+    },
+    [cancelAssistantNow, setRemoteTracksEnabled, setMicrophoneEnabled]
+  );
 
-  const enforceVoiceSession = useCallback(async () => {
-    try {
-      console.log('🎤 Switching to VOICE mode...');
+  const enforceVoiceSession = useCallback(
+    async (customParams?: Partial<any>) => {
+      const c = clientRef.current as any;
+      if (!c) throw new Error('Client not ready');
 
-      await clientRef.current?.sendRaw({
-        type: 'session.update',
-        session: {
+      try {
+        const defaultVoiceParams = {
           model: 'gpt-4o-realtime-preview-2024-12-17',
           voice: 'shimmer',
           modalities: ['text', 'audio'],
@@ -192,69 +189,84 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
             silence_duration_ms: 1200,
           },
           input_audio_transcription: { model: 'whisper-1' },
-        },
-      });
+        };
 
-      console.log('✅ Session updated to voice mode');
+        await c.sendRaw({
+          type: 'session.update',
+          session: {
+            ...defaultVoiceParams,
+            ...customParams,
+          },
+        });
 
-      await delay(300);
+        await delay(300);
+        await restartSpeakerRoute();
 
-      await restartSpeakerRoute();
-
-      setRemoteTracksEnabled(true);
-      setMicrophoneEnabled(true);
-
-      console.log('✅ VOICE mode activated');
-    } catch (e) {
-      console.error('❌ Failed to enforce voice session:', e);
-      throw new Error('Failed to enforce voice session');
-    }
-  }, [restartSpeakerRoute, setRemoteTracksEnabled, setMicrophoneEnabled]);
+        setRemoteTracksEnabled(true);
+        setMicrophoneEnabled(true);
+      } catch (e) {
+        throw new Error('Failed to enforce voice session' + e);
+      }
+    },
+    [restartSpeakerRoute, setRemoteTracksEnabled, setMicrophoneEnabled]
+  );
 
   const initSession = useCallback(
-    async (newMode: 'text' | 'voice') => {
-      console.log(`🔄 Initializing session in ${newMode} mode...`);
+    async (newMode: 'text' | 'voice', customParams?: Partial<any>) => {
+      if (!clientReady) {
+        throw new Error('Client not ready');
+      }
+      if (initInProgressRef.current) {
+        // Не запускаем повторную инициализацию в параллель
+        return;
+      }
+      initInProgressRef.current = true;
+
       setIsModeReady('connecting');
 
       const dcOpened = await waitUntilDataChannelOpen(5000);
       if (!dcOpened) {
         setIsModeReady('disconnected');
+        initInProgressRef.current = false;
         throw new Error('DataChannel not open');
       }
 
       try {
         if (newMode === 'text') {
-          await enforceTextSession();
+          await enforceTextSession(customParams);
         } else {
-          await enforceVoiceSession();
+          await enforceVoiceSession(customParams);
         }
 
         setMode(newMode);
         setIsModeReady('connected');
-        console.log(`✅ Session initialized in ${newMode} mode`);
       } catch (e) {
-        console.error('❌ Failed to init session:', e);
         setIsModeReady('disconnected');
-        throw new Error('Failed to init session');
+        throw new Error('Failed to init session' + e);
+      } finally {
+        initInProgressRef.current = false;
       }
     },
-    [waitUntilDataChannelOpen, enforceTextSession, enforceVoiceSession]
+    [
+      clientReady,
+      waitUntilDataChannelOpen,
+      enforceTextSession,
+      enforceVoiceSession,
+    ]
   );
 
   const handleSendMessage = useCallback(async (text: string) => {
     if (!text.trim()) {
-      console.warn('⚠️ Empty message');
       throw new Error('Empty message');
     }
-
-    const dc = clientRef.current?.getDataChannel?.();
+    const c = clientRef.current as any;
+    const dc = c?.getDataChannel?.();
     if (!dc || dc.readyState !== 'open') {
-      console.warn('⚠️ DataChannel not open');
       throw new Error('DataChannel not open');
     }
 
     try {
-      await clientRef.current?.sendRaw({
+      await c?.sendRaw({
         type: 'conversation.item.create',
         item: {
           type: 'message',
@@ -263,17 +275,14 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
         },
       });
 
-      await clientRef.current?.sendRaw({
+      await c?.sendRaw({
         type: 'response.create',
         response: {
           modalities: ['text'],
         },
       });
-
-      console.log('✅ Message sent');
     } catch (e) {
-      console.error('❌ Failed to send message:', e);
-      throw new Error('Failed to send message');
+      throw new Error('Failed to send message' + e);
     }
   }, []);
 
@@ -284,5 +293,6 @@ export const useSessionOptions = (client: RealtimeClientClass) => {
     isModeReady,
     mode,
     cancelAssistantNow,
+    clientReady,
   };
 };

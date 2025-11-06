@@ -6,6 +6,7 @@ import type {
   ChatOptions,
   RealtimeSuccessCallbacks,
   RealtimeErrorCallbacks,
+  AddableMessage,
 } from '@react-native-openai-realtime/types';
 import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 
@@ -202,3 +203,54 @@ export type CoreConfig = Omit<
   RealTimeClientProps,
   'autoConnect' | 'attachChat' | 'children'
 >;
+
+export type SessionMode = 'voice' | 'text';
+
+export type InitializeMode = {
+  type: SessionMode;
+  options?: Partial<any>;
+};
+
+export type EnhancedRealTimeClientProps = RealTimeClientProps & {
+  initializeMode?: InitializeMode;
+  attemptsToReconnect?: number;
+  onReconnectAttempt?: (attempt: number, maxAttempts: number) => void;
+  onReconnectSuccess?: () => void;
+  onReconnectFailed?: (error: any) => void;
+};
+
+export type RealTimeClientHandle = {
+  enableMicrophone: () => Promise<void>;
+  getClient: () => RealtimeClientClass | null;
+  getStatus: () =>
+    | 'idle'
+    | 'connecting'
+    | 'connected'
+    | 'disconnected'
+    | 'error';
+  setTokenProvider: (tp: TokenProvider) => void;
+
+  disableMicrophone: () => Promise<void>;
+  connect: () => Promise<void>;
+  disconnect: () => Promise<void>;
+
+  sendRaw: (e: any) => Promise<void> | void;
+  sendResponse: (opts?: any) => void;
+  sendResponseStrict: (opts: {
+    instructions: string;
+    modalities?: Array<'audio' | 'text'>;
+    conversation?: 'auto' | 'none';
+  }) => void;
+  updateSession: (patch: Partial<any>) => void;
+
+  addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
+  clearAdded: () => void;
+  clearChatHistory: () => void;
+  getNextTs: () => number;
+
+  // Новые методы для управления режимами
+  switchToTextMode: (customParams?: Partial<any>) => Promise<void>;
+  switchToVoiceMode: (customParams?: Partial<any>) => Promise<void>;
+  getCurrentMode: () => SessionMode;
+  getModeStatus: () => 'idle' | 'connecting' | 'connected' | 'disconnected';
+};

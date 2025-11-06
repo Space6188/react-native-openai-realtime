@@ -4,7 +4,6 @@ import {
   CoreConfig,
   ExtendedChatMsg,
   RealtimeClientOptionsBeforePrune,
-  RealTimeClientProps,
   RealtimeContextValue,
   TokenProvider,
 } from '@react-native-openai-realtime/types';
@@ -21,47 +20,24 @@ import { AppState, AppStateStatus } from 'react-native';
 import { RealtimeClientClass } from '@react-native-openai-realtime/components';
 import { attachChatAdapter } from '@react-native-openai-realtime/adapters';
 import { RealtimeProvider } from '@react-native-openai-realtime/context';
+import type {
+  EnhancedRealTimeClientProps,
+  RealTimeClientHandle,
+  SessionMode,
+} from '@react-native-openai-realtime/types';
 import { prune } from '@react-native-openai-realtime/helpers';
 import {
   SuccessHandler,
   ErrorHandler,
 } from '@react-native-openai-realtime/handlers';
+import { useSessionOptions } from '@react-native-openai-realtime/hooks'; // ВАЖНО: см. вторую часть файла ниже
+import { ErrorCallbackPayload } from '@react-native-openai-realtime/types';
 
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-export type RealTimeClientHandle = {
-  enableMicrophone: () => Promise<void>;
-  getClient: () => RealtimeClientClass | null;
-  getStatus: () =>
-    | 'idle'
-    | 'connecting'
-    | 'connected'
-    | 'disconnected'
-    | 'error';
-  setTokenProvider: (tp: TokenProvider) => void;
-
-  disableMicrophone: () => Promise<void>;
-  connect: () => Promise<void>;
-  disconnect: () => Promise<void>;
-
-  sendRaw: (e: any) => Promise<void> | void;
-  sendResponse: (opts?: any) => void;
-  sendResponseStrict: (opts: {
-    instructions: string;
-    modalities?: Array<'audio' | 'text'>;
-    conversation?: 'auto' | 'none';
-  }) => void;
-  updateSession: (patch: Partial<any>) => void;
-
-  addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
-  clearAdded: () => void;
-  clearChatHistory: () => void;
-  getNextTs: () => number;
-};
-
 export const RealTimeClient = forwardRef<
   RealTimeClientHandle,
-  RealTimeClientProps
+  EnhancedRealTimeClientProps
 >((props, ref) => {
   const {
     tokenProvider,
@@ -95,8 +71,14 @@ export const RealTimeClient = forwardRef<
     chatUserPlaceholderOnStart,
     chatAssistantAddOnDelta,
     chatAssistantPlaceholderOnStart,
-
     allowConnectWithoutMic = true,
+
+    // Новые пропсы
+    initializeMode,
+    attemptsToReconnect = 1,
+    onReconnectAttempt,
+    onReconnectSuccess,
+    onReconnectFailed,
 
     // Success callbacks
     onHangUpStarted,
@@ -122,10 +104,18 @@ export const RealTimeClient = forwardRef<
   } = props;
 
   const clientRef = useRef<RealtimeClientClass | null>(null);
+  const [hookClient, setHookClient] = useState<RealtimeClientClass | null>(
+    null
+  );
+
   const connectionUnsubRef = useRef<(() => void) | null>(null);
   const detachChatRef = useRef<null | (() => void)>(null);
   const mountedRef = useRef(false);
   const connectCalledRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const isReconnectingRef = useRef(false);
+  const sessionInitializedRef = useRef(false);
+  const initInProgressRef = useRef(false);
 
   const [status, setStatus] = useState<
     'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
@@ -154,7 +144,13 @@ export const RealTimeClient = forwardRef<
       hooks: prune({
         onOpen,
         onEvent,
-        onError,
+        onError: (event: ErrorCallbackPayload) => {
+          // Проксируем и одновременно отмечаем критические ошибки
+          if (event.severity === 'critical') {
+            setStatus('error');
+          }
+          onError?.(event);
+        },
         onUserTranscriptionDelta,
         onUserTranscriptionCompleted,
         onAssistantTextDelta,
@@ -210,25 +206,18 @@ export const RealTimeClient = forwardRef<
     allowConnectWithoutMic,
   ]);
 
-  // В файле: RealTimeClient.tsx
-  // Замените часть с созданием successHandler/errorHandler:
-
   const ensureClient = useCallback(() => {
     if (!clientRef.current) {
-      // ✅ ИСПРАВЛЕНО: ErrorHandler НЕ меняет статус для warning
       const errorHandler = new ErrorHandler(
         (event) => {
-          // Меняем статус только для критических ошибок
           if (event.severity === 'critical') {
             setStatus('error');
           }
-          // Вызываем пользовательский onError
           onError?.(event);
         },
         { error: logger?.error }
       );
 
-      // Комбинированный SuccessHandler
       const successHandler = new SuccessHandler(
         {
           onPeerConnectionCreatingStarted: () => {
@@ -239,14 +228,16 @@ export const RealTimeClient = forwardRef<
             onPeerConnectionCreated?.(pc);
           },
           onRTCPeerConnectionStateChange: (state) => {
-            // Синхронизируем статус только для валидных состояний
-            if (state === 'connected') setStatus('connected');
-            else if (state === 'connecting' || state === 'new')
+            if (state === 'connected') {
+              setStatus('connected');
+              reconnectAttemptRef.current = 0;
+            } else if (state === 'connecting' || state === 'new') {
               setStatus('connecting');
-            else if (state === 'failed') setStatus('error');
-            else if (state === 'disconnected' || state === 'closed')
+            } else if (state === 'failed') {
+              setStatus('error');
+            } else if (state === 'disconnected' || state === 'closed') {
               setStatus('disconnected');
-
+            }
             onRTCPeerConnectionStateChange?.(state);
           },
           onDataChannelOpen: (channel) => {
@@ -257,8 +248,6 @@ export const RealTimeClient = forwardRef<
             setStatus('disconnected');
             onDataChannelClose?.();
           },
-
-          // Остальные callbacks - просто прокидываем
           onGetUserMediaSetted,
           onLocalStreamSetted,
           onLocalStreamAddedTrack,
@@ -283,11 +272,12 @@ export const RealTimeClient = forwardRef<
         errorHandler
       );
 
-      setStatus(clientRef.current.getConnectionState());
-      const unsub = clientRef.current.onConnectionStateChange((s) =>
-        setStatus(s)
+      // Подписка на изменение connection state
+      setStatus(clientRef.current.getConnectionState?.() ?? 'idle');
+      const unsub = clientRef.current.onConnectionStateChange?.((s) =>
+        setStatus(s as any)
       );
-      connectionUnsubRef.current = unsub;
+      connectionUnsubRef.current = unsub ?? null;
 
       if (tokenProvider) {
         try {
@@ -295,6 +285,9 @@ export const RealTimeClient = forwardRef<
         } catch {}
       }
     }
+
+    // Важное: пробрасываем реальный клиент в хук
+    setHookClient(clientRef.current!);
     return clientRef.current!;
   }, [
     optionsSnapshot,
@@ -323,6 +316,20 @@ export const RealTimeClient = forwardRef<
     logger,
   ]);
 
+  // Создаём клиент заранее при монтировании, чтобы хук получил валидный инстанс
+  useEffect(() => {
+    const c = ensureClient();
+    setHookClient(c);
+    return () => {
+      try {
+        connectionUnsubRef.current?.();
+      } catch {}
+    };
+  }, [ensureClient]);
+
+  // Хук — теперь получает реальный клиент или null и сам «дождётся» готовности
+  const sessionOptions = useSessionOptions(hookClient);
+
   useEffect(() => {
     if (clientRef.current && tokenProvider) {
       try {
@@ -334,7 +341,7 @@ export const RealTimeClient = forwardRef<
   useEffect(() => {
     const onAppState = (state: AppStateStatus) => {
       if (state === 'background') {
-        const currentStatus = clientRef.current?.getStatus?.();
+        const currentStatus = clientRef.current?.getConnectionState?.();
         if (currentStatus === 'connecting') {
           setTimeout(() => {
             if (AppState.currentState === 'background') {
@@ -349,6 +356,56 @@ export const RealTimeClient = forwardRef<
     const sub = AppState.addEventListener('change', onAppState);
     return () => sub.remove();
   }, []);
+
+  // Логика переподключения (без повторной инициализации режима — это делает эффект ниже)
+  const handleReconnect = useCallback(async () => {
+    if (
+      isReconnectingRef.current ||
+      reconnectAttemptRef.current >= attemptsToReconnect
+    ) {
+      return;
+    }
+
+    isReconnectingRef.current = true;
+    reconnectAttemptRef.current += 1;
+
+    onReconnectAttempt?.(reconnectAttemptRef.current, attemptsToReconnect);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      if (mountedRef.current && clientRef.current) {
+        await clientRef.current.disconnect();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await clientRef.current.connect();
+
+        onReconnectSuccess?.();
+        reconnectAttemptRef.current = 0;
+        // Важно: после reconnect не вызываем initSession здесь — пусть сделает эффект на "connected"
+        sessionInitializedRef.current = false;
+      }
+    } catch (reconnectError) {
+      if (reconnectAttemptRef.current >= attemptsToReconnect) {
+        onReconnectFailed?.(reconnectError);
+      } else {
+        setTimeout(() => handleReconnect(), 1000);
+      }
+    } finally {
+      isReconnectingRef.current = false;
+    }
+  }, [
+    attemptsToReconnect,
+    onReconnectAttempt,
+    onReconnectSuccess,
+    onReconnectFailed,
+  ]);
+
+  // Отслеживаем ошибки для переподключения
+  useEffect(() => {
+    if (status === 'error' && !isReconnectingRef.current) {
+      handleReconnect();
+    }
+  }, [status, handleReconnect]);
 
   const connect = useCallback(async () => {
     const client = ensureClient();
@@ -372,6 +429,7 @@ export const RealTimeClient = forwardRef<
     const client = clientRef.current;
     if (!client) return;
     try {
+      sessionInitializedRef.current = false;
       await client.disconnect();
     } finally {
       if (detachChatRef.current) {
@@ -385,14 +443,54 @@ export const RealTimeClient = forwardRef<
     }
   }, [deleteChatHistoryOnDisconnect]);
 
-  // Защита от многократного autoConnect
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       connectCalledRef.current = false;
+      try {
+        connectionUnsubRef.current?.();
+      } catch {}
     };
   }, []);
+
+  // ЕДИНСТВЕННОЕ место инициализации начального режима: после успешного подключения и когда хук «готов»
+  useEffect(() => {
+    const initializeSession = async () => {
+      if (
+        status !== 'connected' ||
+        !initializeMode ||
+        sessionInitializedRef.current ||
+        !sessionOptions.clientReady
+      ) {
+        return;
+      }
+
+      if (initInProgressRef.current) return;
+      initInProgressRef.current = true;
+
+      try {
+        await sessionOptions.initSession(
+          initializeMode.type,
+          initializeMode.options
+        );
+        sessionInitializedRef.current = true;
+      } catch (e) {
+        // логируем, но не паникуем
+        logger?.error?.('Failed to init initial session', e);
+      } finally {
+        initInProgressRef.current = false;
+      }
+    };
+
+    initializeSession();
+  }, [
+    status,
+    initializeMode,
+    sessionOptions,
+    sessionOptions.clientReady,
+    logger,
+  ]);
 
   useEffect(() => {
     if (!autoConnect || !mountedRef.current || connectCalledRef.current) return;
@@ -478,7 +576,41 @@ export const RealTimeClient = forwardRef<
 
   const clearChatHistory = useCallback(() => {
     clientRef.current?.clearChatHistory();
+    // Если нужно синхронно почистить локальный чат:
+    // setChat([]);
+    // setAddedMessages([]);
   }, []);
+
+  // Методы переключения режимов через хук
+  const switchToTextMode = useCallback(
+    async (customParams?: Partial<any>) => {
+      if (!sessionOptions.clientReady) {
+        throw new Error('Client not ready');
+      }
+      await sessionOptions.initSession('text', customParams);
+      sessionInitializedRef.current = true;
+    },
+    [sessionOptions]
+  );
+
+  const switchToVoiceMode = useCallback(
+    async (customParams?: Partial<any>) => {
+      if (!sessionOptions.clientReady) {
+        throw new Error('Client not ready');
+      }
+      await sessionOptions.initSession('voice', customParams);
+      sessionInitializedRef.current = true;
+    },
+    [sessionOptions]
+  );
+
+  const getCurrentMode = useCallback((): SessionMode => {
+    return sessionOptions?.mode ?? 'text';
+  }, [sessionOptions]);
+
+  const getModeStatus = useCallback(() => {
+    return sessionOptions?.isModeReady ?? 'idle';
+  }, [sessionOptions]);
 
   const value: RealtimeContextValue = useMemo(
     () => ({
@@ -542,6 +674,11 @@ export const RealTimeClient = forwardRef<
       clearAdded,
       clearChatHistory,
       getNextTs,
+
+      switchToTextMode,
+      switchToVoiceMode,
+      getCurrentMode,
+      getModeStatus,
     }),
     [
       status,
@@ -551,6 +688,10 @@ export const RealTimeClient = forwardRef<
       clearAdded,
       clearChatHistory,
       getNextTs,
+      switchToTextMode,
+      switchToVoiceMode,
+      getCurrentMode,
+      getModeStatus,
     ]
   );
 

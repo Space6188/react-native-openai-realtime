@@ -108,13 +108,14 @@ export interface RealtimeSuccessCallbacks {
 /**
  * Коллбэки для Error событий
  */
+export type ErrorCallbackPayload = {
+  stage: string;
+  error: Error;
+  severity: 'critical' | 'warning' | 'info';
+  recoverable: boolean;
+  timestamp: number;
+  context?: Record<string, any>;
+};
 export interface RealtimeErrorCallbacks {
-  onError?: (event: {
-    stage: string;
-    error: Error;
-    severity: 'critical' | 'warning' | 'info';
-    recoverable: boolean;
-    timestamp: number;
-    context?: Record<string, any>;
-  }) => void;
+  onError?: (event: ErrorCallbackPayload) => void;
 }
