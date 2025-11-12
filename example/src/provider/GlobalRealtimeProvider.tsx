@@ -1,55 +1,40 @@
-/**
- * GlobalRealtimeProvider - Глобальный провайдер для всего приложения
- *
- * Рекомендации:
- * - Используйте один провайдер на верхнем уровне приложения
- * - ref позволяет добавлять UI-сообщения из onToolCall
- * - Настройте токен-провайдер и tools под свои нужды
- * - Включите Success callbacks для мониторинга
- */
-
-import React, {useCallback, useMemo, useRef} from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import {
   RealTimeClient,
   createSpeechActivityMiddleware,
-  type RealTimeClientHandle,
   type IncomingMiddleware,
   type OutgoingMiddleware,
+  type RealTimeClientHandle,
 } from 'react-native-openai-realtime';
-
-// ==================== Configuration ====================
+import {
+  TOOL_ACK_MESSAGES,
+  WORKSPACE_INSTRUCTIONS,
+  WORKSPACE_TOOLS,
+  type WorkspaceToolName,
+} from './workspaceScenario';
 
 const SERVER_BASE = 'http://localhost:8787';
 
 const tokenProvider = async () => {
-  const r = await fetch(`${SERVER_BASE}/realtime/session`);
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(`Failed to fetch token: ${r.status} ${text}`);
+  const response = await fetch(`${SERVER_BASE}/realtime/session`);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to fetch token: ${response.status} ${text}`);
   }
-  const j = await r.json();
-  return j.client_secret.value;
+  const json = await response.json();
+  return json.client_secret.value;
 };
 
-// ==================== Middleware ====================
-
-// Incoming middleware: фильтрация пустых дельт и междометий
 const createIncomingMiddleware = (): IncomingMiddleware[] => [
-  // 1. Speech activity tracker (обязательно первым)
   createSpeechActivityMiddleware(),
-
-  // 2. Фильтрация "мусорных" междометий
-  async ({event}) => {
+  async ({ event }) => {
     if (event?.type === 'conversation.item.input_audio_transcription.delta') {
       const delta = event?.delta?.trim() || '';
-      // Блокируем короткие междометия типа "эм", "мм", "ээ"
-      if (/^(эм+|мм+|ээ+|ага+|угу+|хм+)\.?$/i.test(delta)) {
+      if (/^(эм+|мм+|ээ+|ага+|угу+|хм+).?$/i.test(delta)) {
         console.log('🚫 Filtered filler:', delta);
         return 'stop';
       }
     }
-
-    // Фильтрация пустых дельт ассистента
     if (
       event?.type === 'response.text.delta' ||
       event?.type === 'response.audio_transcript.delta'
@@ -58,30 +43,23 @@ const createIncomingMiddleware = (): IncomingMiddleware[] => [
         return 'stop';
       }
     }
-
-    return; // Пропускаем дальше
+    return;
   },
-
-  // 3. Логирование важных событий (опционально)
-  async ({event}) => {
+  async ({ event }) => {
     const important = new Set([
       'conversation.item.created',
       'response.created',
       'response.done',
       'error',
     ]);
-
     if (important.has(event?.type)) {
       console.log('📨', event.type);
     }
-
     return;
   },
 ];
 
-// Outgoing middleware: валидация и метаданные
 const createOutgoingMiddleware = (): OutgoingMiddleware[] => [
-  // 1. Очистка пустых текстовых сообщений
   event => {
     if (
       event?.type === 'conversation.item.create' &&
@@ -96,17 +74,15 @@ const createOutgoingMiddleware = (): OutgoingMiddleware[] => [
     }
     return event;
   },
-
-  // 2. Добавление метаданных к response.create (опционально)
   event => {
     if (event?.type === 'response.create') {
       const instructions = event.response?.instructions || '';
-      if (instructions && !instructions.includes('[App]')) {
+      if (instructions && !instructions.includes('[Atlas]')) {
         return {
           ...event,
           response: {
             ...event.response,
-            instructions: `[App] ${instructions}`,
+            instructions: `[Atlas] ${instructions}`,
           },
         };
       }
@@ -115,96 +91,119 @@ const createOutgoingMiddleware = (): OutgoingMiddleware[] => [
   },
 ];
 
-// ==================== Tools Spec ====================
+const LOADING_BUBBLES: Record<WorkspaceToolName, string> = {
+  list_workspaces:
+    '🔄 Searching the workspace catalog so you can compare without digging.',
+  calculate_workspace_quote:
+    '🔄 Calculating the quote with staffing and equipment.',
+  create_workspace_booking:
+    '🔄 Finalising the reservation details with the onsite team.',
+  list_last_minute_offers:
+    '🔄 Checking which last-minute slots are still open.',
+};
 
-const toolsSpec = [
+const MOCK_SPACES = [
   {
-    type: 'function' as const,
-    name: 'search_flights',
-    description: 'Search for available flights between cities',
-    parameters: {
-      type: 'object',
-      properties: {
-        from: {type: 'string', description: 'Departure city'},
-        to: {type: 'string', description: 'Destination city'},
-        date: {type: 'string', description: 'Date in YYYY-MM-DD format'},
-      },
-      required: ['from', 'to'],
-      additionalProperties: false,
-    },
+    id: 'studio-soho',
+    name: 'Soho Workshop Loft',
+    city: 'New York',
+    capacity: 18,
+    layout: ['workshop', 'boardroom'],
+    amenities: ['whiteboard', 'projector', 'studio lighting'],
   },
   {
-    type: 'function' as const,
-    name: 'search_professionals',
-    description: 'Search for professionals or services',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {type: 'string', description: 'Search query'},
-        category: {type: 'string', description: 'Category filter'},
-        location: {type: 'string', description: 'Location filter'},
-      },
-      required: ['query'],
-      additionalProperties: false,
-    },
+    id: 'studio-shoreditch',
+    name: 'Shoreditch Creator Lab',
+    city: 'London',
+    capacity: 12,
+    layout: ['boardroom', 'podcast'],
+    amenities: ['4K camera kit', 'podcast mics', 'backdrops'],
   },
   {
-    type: 'function' as const,
-    name: 'get_weather',
-    description: 'Get current weather for a city',
-    parameters: {
-      type: 'object',
-      properties: {
-        city: {type: 'string', description: 'City name'},
-      },
-      required: ['city'],
-      additionalProperties: false,
-    },
+    id: 'studio-mitte',
+    name: 'Mitte Innovation Hub',
+    city: 'Berlin',
+    capacity: 24,
+    layout: ['workshop', 'hackathon'],
+    amenities: ['ultra-wide displays', 'whiteboard wall', 'sound system'],
   },
 ];
 
-// ==================== Provider Component ====================
+const MOCK_DEALS = [
+  {
+    id: 'deal-nyc',
+    city: 'New York',
+    label: 'Sunrise Sprint Slot',
+    starts_at: '2025-01-12T08:30:00-05:00',
+    discount: 25,
+  },
+  {
+    id: 'deal-ldn',
+    city: 'London',
+    label: 'Evening Creator Special',
+    starts_at: '2025-01-11T18:00:00Z',
+    discount: 30,
+  },
+  {
+    id: 'deal-berlin',
+    city: 'Berlin',
+    label: 'Night Owl Hack Pack',
+    starts_at: '2025-01-10T22:00:00+01:00',
+    discount: 20,
+  },
+];
 
-export const GlobalRealtimeProvider: React.FC<{
-  children: React.ReactNode;
-}> = ({children}) => {
+const buildWorkspaceQuote = (args: any) => {
+  const base = 120;
+  const durationHours =
+    (new Date(args.end_time).getTime() - new Date(args.start_time).getTime()) /
+    3_600_000;
+  const capacityCost = Math.max(args.capacity ?? 1, 1) * 9;
+  const layoutCost =
+    args.layout === 'workshop'
+      ? 65
+      : args.layout === 'boardroom'
+      ? 40
+      : args.layout === 'hackathon'
+      ? 85
+      : 30;
+  const equipmentCost = Array.isArray(args.equipment)
+    ? args.equipment.length * 15
+    : 0;
+  const cateringCost = args.catering ? 90 : 0;
+  const durationCost = Number.isFinite(durationHours)
+    ? Math.max(durationHours, 1) * 50
+    : 50;
+
+  const subtotal = Math.round(base + capacityCost + layoutCost + equipmentCost);
+  const total = subtotal + cateringCost + durationCost;
+
+  return {
+    quote_id: `quote-${Date.now()}`,
+    city: args.city,
+    layout: args.layout,
+    capacity: args.capacity,
+    start_time: args.start_time,
+    end_time: args.end_time,
+    equipment: args.equipment ?? [],
+    catering: Boolean(args.catering),
+    subtotal: total,
+    taxes: Math.round(total * 0.08),
+    currency: 'USD',
+  };
+};
+
+export const GlobalRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const rtcRef = useRef<RealTimeClientHandle | null>(null);
-
-  // ==================== Middleware ====================
-
   const incomingMiddleware = useMemo(() => createIncomingMiddleware(), []);
   const outgoingMiddleware = useMemo(() => createOutgoingMiddleware(), []);
 
-  // ==================== Callbacks ====================
-
-  // onOpen - вызывается при открытии DataChannel
-  const onOpen = useCallback(async (dc: RTCDataChannel) => {
+  const onOpen = useCallback((dc: RTCDataChannel) => {
     console.log('🎉 DataChannel opened:', dc?.label);
-
-    // Получаем клиента
-    const client = rtcRef.current?.getClient();
-    if (!client) return;
-
-    // Опционально: инициализация режима
-    // await rtcRef.current?.sendRaw({
-    //   type: 'session.update',
-    //   session: {
-    //     modalities: ['text'],
-    //     turn_detection: null,
-    //   },
-    // });
-
-    // Восстановление истории чата (если нужно)
-    const chatHistory = client.getChat?.() || [];
-    const last12 = chatHistory.filter(m => m.type === 'text').slice(-12);
-    if (last12.length) {
-      console.log(`📜 Restored ${last12.length} messages from history`);
-    }
-
-    console.log('✅ Provider ready');
   }, []);
 
-  // onError - централизованная обработка ошибок
   const onError = useCallback((errorEvent: any) => {
     if (errorEvent?.stage) {
       console.error(
@@ -221,269 +220,198 @@ export const GlobalRealtimeProvider: React.FC<{
     }
   }, []);
 
-  // onEvent - логирование входящих событий
   const onEvent = useCallback((event: any) => {
-    // Логируем только важные события
-    const important = new Set([
-      'session.updated',
-      'conversation.item.created',
-      'response.created',
-      'response.done',
-      'error',
-    ]);
-
-    if (important.has(event.type)) {
-      console.log('📨 Event:', event.type);
+    if (
+      event?.type === 'response.function_call_arguments.done' &&
+      event?.name &&
+      TOOL_ACK_MESSAGES[event.name as WorkspaceToolName]
+    ) {
+      const bubble = LOADING_BUBBLES[event.name as WorkspaceToolName];
+      if (bubble) {
+        rtcRef.current?.addMessage({
+          type: 'ui',
+          role: 'assistant',
+          kind: 'loader',
+          payload: { text: bubble },
+        });
+      }
     }
   }, []);
 
-  // onToolCall - обработка вызовов функций
   const onToolCall = useCallback(
     async ({
       name,
       args,
       call_id,
     }: {
-      name: string;
+      name: WorkspaceToolName;
       args: any;
       call_id: string;
     }) => {
+      await new Promise(resolve => setTimeout(resolve, 350));
       try {
-        console.log('🔧 Tool call:', name, args);
+        if (name === 'list_workspaces') {
+          const city = (args?.city || '').toLowerCase();
+          const needs = Array.isArray(args?.needs)
+            ? (args.needs as string[])
+            : [];
+          const items = MOCK_SPACES.filter(space => {
+            const cityMatch = city ? space.city.toLowerCase() === city : true;
+            const needsMatch = needs.length
+              ? needs.every(need =>
+                  space.amenities.some(amenity =>
+                    amenity.toLowerCase().includes(need.toLowerCase()),
+                  ),
+                )
+              : true;
+            return cityMatch && needsMatch;
+          });
 
-        // Определяем тип инструмента
-        const isFlights =
-          name === 'search_flights' || name === 'SearchTripByAirplane';
-        const isPros =
-          name === 'search_professionals' || name === 'SearchProfessionals';
-        const isWeather = name === 'get_weather';
+          rtcRef.current?.addMessage({
+            type: 'ui',
+            role: 'assistant',
+            kind: 'workspace_list',
+            payload: {
+              requested_city: args?.city ?? 'Any',
+              items,
+            },
+          });
 
-        if (!isFlights && !isPros && !isWeather) {
-          return undefined; // Неизвестный tool - библиотека не отправит output
+          return { items };
         }
 
-        // Вызов API
-        let url: string;
-        let data: any;
-
-        if (isFlights) {
-          url = `${SERVER_BASE}/api/search_flights`;
-          const resp = await fetch(url, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(args ?? {}),
-          });
-          data = await resp.json();
-
-          // Добавляем UI-карточку через ref
+        if (name === 'calculate_workspace_quote') {
+          const quote = buildWorkspaceQuote(args);
           rtcRef.current?.addMessage({
             type: 'ui',
             role: 'assistant',
-            kind: 'flights',
-            payload: {
-              total: Number(data?.total ?? 0),
-              items: Array.isArray(data?.items) ? data.items : [],
-            },
+            kind: 'workspace_quote',
+            payload: quote,
           });
-        } else if (isPros) {
-          url = `${SERVER_BASE}/api/search`;
-          const resp = await fetch(url, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(args ?? {}),
-          });
-          data = await resp.json();
+          return quote;
+        }
 
-          rtcRef.current?.addMessage({
-            type: 'ui',
-            role: 'assistant',
-            kind: 'professionals',
-            payload: {
-              total: Number(data?.total ?? 0),
-              items: Array.isArray(data?.items) ? data.items : [],
-            },
-          });
-        } else if (isWeather) {
-          // Mock weather API
-          data = {
-            city: args.city,
-            temperature: Math.round(15 + Math.random() * 15),
-            condition: 'Sunny',
-            humidity: Math.round(40 + Math.random() * 30),
+        if (name === 'create_workspace_booking') {
+          const confirmation = {
+            booking_reference: `atlas-${Math.random().toString(36).slice(2, 8)}`,
+            quote_id: args.quote_id,
+            customer_name: args.customer_name,
+            status: 'confirmed',
           };
 
           rtcRef.current?.addMessage({
             type: 'ui',
             role: 'assistant',
-            kind: 'weather',
-            payload: data,
+            kind: 'workspace_booking',
+            payload: confirmation,
           });
+
+          return confirmation;
         }
 
-        // Возвращаем результат - библиотека автоматически:
-        // 1. Отправит function_call_output
-        // 2. Сделает response.create
-        return data;
-      } catch (e: any) {
-        console.error('❌ Tool call failed:', e);
+        if (name === 'list_last_minute_offers') {
+          const city = (args?.city || '').toLowerCase();
+          const items = MOCK_DEALS.filter(deal =>
+            city ? deal.city.toLowerCase() === city : true,
+          );
 
-        // Добавляем UI-сообщение об ошибке
+          rtcRef.current?.addMessage({
+            type: 'ui',
+            role: 'assistant',
+            kind: 'workspace_deals',
+            payload: {
+              requested_city: args?.city ?? 'Any',
+              items,
+            },
+          });
+
+          return { items };
+        }
+
+        return undefined;
+      } catch (error: any) {
+        console.error('❌ Tool call failed:', error);
         rtcRef.current?.addMessage({
           type: 'ui',
           role: 'assistant',
           kind: 'error',
-          payload: {error: e?.message || String(e)},
+          payload: { error: error?.message || String(error) },
         });
-
-        return {error: e?.message || String(e)};
+        return { error: error?.message || String(error) };
+      } finally {
+        rtcRef.current?.clearAdded?.();
       }
     },
     [],
   );
 
-  // ==================== Success Callbacks ====================
-
-  const onPeerConnectionCreated = useCallback(
-    () => console.log('✅ PeerConnection created'),
-    [],
-  );
-
-  const onRTCPeerConnectionStateChange = useCallback((state: string) => {
-    console.log('🔄 Connection state changed:', state);
-  }, []);
-
-  const onLocalStreamSetted = useCallback(
-    () => console.log('🎤 Local stream ready'),
-    [],
-  );
-
-  const onRemoteStreamSetted = useCallback(
-    () => console.log('🔊 Remote stream received'),
-    [],
-  );
-
-  const onIceGatheringComplete = useCallback(
-    () => console.log('✅ ICE gathering completed'),
-    [],
-  );
-
-  const onMicrophonePermissionDenied = useCallback(
-    () =>
-      console.warn('⚠️ Microphone permission denied - fallback to recvonly'),
-    [],
-  );
-
-  const onDataChannelOpen = useCallback((dc: RTCDataChannel) => {
-    console.log('✅ DataChannel opened:', dc?.label);
-  }, []);
-
-  // Universal success callback
-  const onSuccess = useCallback((stage: string, data?: any) => {
-    const important = new Set([
-      'peer_connection_created',
-      'data_channel_open',
-      'ice_gathering_complete',
-    ]);
-
-    if (important.has(stage)) {
-      console.log(`✅ [SUCCESS] ${stage}`, data);
-    }
-  }, []);
-
-  // ==================== Logger ====================
-
   const logger = useMemo(
     () => ({
-      info: (m: string, ...a: any[]) => console.log('ℹ️', m, ...a),
-      warn: (m: string, ...a: any[]) => console.warn('⚠️', m, ...a),
-      error: (m: string, ...a: any[]) => console.error('❌', m, ...a),
-      debug: (m: string, ...a: any[]) => {
-        if (__DEV__) console.log('🐛', m, ...a);
+      info: (message: string, ...rest: any[]) => console.log('ℹ️', message, ...rest),
+      warn: (message: string, ...rest: any[]) => console.warn('⚠️', message, ...rest),
+      error: (message: string, ...rest: any[]) => console.error('❌', message, ...rest),
+      debug: (message: string, ...rest: any[]) => {
+        if (__DEV__) console.log('🐛', message, ...rest);
       },
     }),
     [],
   );
 
-  // ==================== Render ====================
-
   return (
     <RealTimeClient
       ref={rtcRef}
-      // Token
       tokenProvider={tokenProvider}
-      // Session
       session={{
         model: 'gpt-4o-realtime-preview-2024-12-17',
         voice: 'shimmer',
-        modalities: ['text'], // Стартуем в текстовом режиме
-        input_audio_transcription: {
-          model: 'whisper-1', // Обязательно для транскрипции!
+        modalities: ['audio', 'text'],
+        input_audio_transcription: { model: 'whisper-1' },
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.55,
+          prefix_padding_ms: 250,
+          silence_duration_ms: 1000,
         },
-        turn_detection: null, // В текстовом режиме VAD не нужен
-        tools: toolsSpec,
-        instructions:
-          'Ты дружелюбный AI ассистент. Отвечай кратко и по делу. Используй инструменты когда нужно.',
+        tools: WORKSPACE_TOOLS,
+        instructions: WORKSPACE_INSTRUCTIONS,
       }}
-      // Greet
-      greetEnabled={false} // Отключаем автоприветствие
-      // Настройки подключения
-      autoConnect={true} // Автоматическое подключение при монтировании
-      autoSessionUpdate={false} // Управляем сессией вручную через onOpen
-      allowConnectWithoutMic={true} // Разрешить работу без микрофона
-      // Callbacks
+      initializeMode={{ type: 'text' }}
+      greetEnabled={false}
+      autoConnect={true}
+      autoSessionUpdate={true}
+      allowConnectWithoutMic={true}
       onOpen={onOpen}
       onError={onError}
       onEvent={onEvent}
       onToolCall={onToolCall}
-      // Success callbacks
-      onSuccess={onSuccess}
-      onPeerConnectionCreated={onPeerConnectionCreated}
-      onRTCPeerConnectionStateChange={onRTCPeerConnectionStateChange}
-      onLocalStreamSetted={onLocalStreamSetted}
-      onRemoteStreamSetted={onRemoteStreamSetted}
-      onDataChannelOpen={onDataChannelOpen}
-      onIceGatheringComplete={onIceGatheringComplete}
-      onMicrophonePermissionDenied={onMicrophonePermissionDenied}
-      // Middleware
+      onSuccess={stage => {
+        if (stage === 'data_channel_open') {
+          console.log('✅ Data channel ready');
+        }
+      }}
+      onPeerConnectionCreated={() => console.log('✅ PeerConnection created')}
+      onRTCPeerConnectionStateChange={state =>
+        console.log('🔄 Connection state:', state)
+      }
+      onDataChannelOpen={dc => console.log('✅ DataChannel opened:', dc.label)}
+      onIceGatheringComplete={() => console.log('✅ ICE gathering complete')}
+      onMicrophonePermissionDenied={() =>
+        console.warn('⚠️ Microphone permission denied; using recvonly')
+      }
       incomingMiddleware={incomingMiddleware}
       outgoingMiddleware={outgoingMiddleware}
-      // Policy
       policyIsMeaningfulText={text => text.trim().length >= 2}
-      // Chat
       chatEnabled={true}
       chatIsMeaningfulText={text => !!text.trim()}
-      chatInverted={false} // false = новые сверху
       chatUserAddOnDelta={true}
       chatAssistantAddOnDelta={true}
-      deleteChatHistoryOnDisconnect={false} // Сохраняем историю при reconnect
-      attachChat={true} // Прикрепить чат к контексту
-      // Logger
-      logger={logger}>
+      chatInverted={false}
+      deleteChatHistoryOnDisconnect={false}
+      logger={logger}
+    >
       {children}
     </RealTimeClient>
   );
 };
 
 export default GlobalRealtimeProvider;
-
-// import React from 'react';
-// import {SafeAreaView, StatusBar, StyleSheet} from 'react-native';
-// import {GlobalRealtimeProvider} from '../provider/globalProvider';
-// import {KitchenSinkRealtimeDemo} from './example';
-
-// export default function App() {
-//   return (
-//     <GlobalRealtimeProvider>
-//       <SafeAreaView style={styles.container}>
-//         <StatusBar barStyle="dark-content" />
-//         <KitchenSinkRealtimeDemo />
-//       </SafeAreaView>
-//     </GlobalRealtimeProvider>
-//   );
-// }
-
-// const styles = StyleSheet.create({
-//   container: {
-//     flex: 1,
-//   },
-// });

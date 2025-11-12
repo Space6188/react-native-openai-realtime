@@ -1,115 +1,133 @@
-/**
- * SimpleDemo - Простой пример использования react-native-openai-realtime
- *
- * Демонстрирует:
- * - Базовое подключение и отключение
- * - Использование useRealtime() хука
- * - Работу со встроенным чатом
- * - Отправку текстовых и голосовых сообщений
- * - Индикацию речевой активности (useSpeechActivity)
- */
-
-import React, {useState} from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  Button,
-  TextInput,
-  FlatList,
-  StyleSheet,
   ActivityIndicator,
+  Button,
+  FlatList,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import {
   RealTimeClient,
-  useRealtime,
-  useSpeechActivity,
   createSpeechActivityMiddleware,
+  useMicrophoneActivity,
+  useRealtime,
+  useSessionOptions,
+  useSpeechActivity,
   type ExtendedChatMsg,
 } from 'react-native-openai-realtime';
+import {
+  TOOL_ACK_MESSAGES,
+  WORKSPACE_INSTRUCTIONS,
+  WORKSPACE_TOOLS,
+  type WorkspaceToolName,
+} from '../provider/workspaceScenario';
 
-// ==================== Provider ====================
-
-const SERVER_BASE = 'http://localhost:8787'; // Замените на ваш сервер
+const SERVER_BASE = 'http://localhost:8787';
 
 const tokenProvider = async () => {
   const response = await fetch(`${SERVER_BASE}/realtime/session`);
   if (!response.ok) {
     throw new Error(`Failed to fetch token: ${response.status}`);
   }
-  const data = await response.json();
-  return data.client_secret.value;
+  const json = await response.json();
+  return json.client_secret.value;
 };
 
+const TOOL_NAMES: WorkspaceToolName[] = WORKSPACE_TOOLS.map(tool => tool.name);
+
 export default function SimpleDemo() {
+  const memoisedMiddleware = useMemo(() => [createSpeechActivityMiddleware()], []);
+
   return (
     <RealTimeClient
       tokenProvider={tokenProvider}
-      // Обязательная конфигурация для транскрипции
+      initializeMode={{ type: 'text' }}
       session={{
         model: 'gpt-4o-realtime-preview-2024-12-17',
-        voice: 'alloy',
+        voice: 'shimmer',
         modalities: ['audio', 'text'],
-        input_audio_transcription: {
-          model: 'whisper-1', // Обязательно для транскрипции голоса!
-        },
+        input_audio_transcription: { model: 'whisper-1' },
         turn_detection: {
           type: 'server_vad',
-          threshold: 0.5,
-          silence_duration_ms: 700,
-          prefix_padding_ms: 300,
+          threshold: 0.55,
+          prefix_padding_ms: 250,
+          silence_duration_ms: 900,
         },
-        instructions: 'Ты дружелюбный ассистент. Отвечай кратко и по делу.',
+        tools: WORKSPACE_TOOLS,
+        instructions: WORKSPACE_INSTRUCTIONS,
       }}
-      // Автоматическое приветствие
-      greetEnabled={true}
-      greetInstructions="Привет! Я на связи и готов помочь."
-      greetModalities={['audio', 'text']}
-      // Middleware для отслеживания речевой активности
-      incomingMiddleware={[createSpeechActivityMiddleware()]}
-      // Настройки чата
-      chatEnabled={true}
-      chatInverted={false} // false = новые сверху
+      greetEnabled={false}
+      incomingMiddleware={memoisedMiddleware}
+      chatEnabled
       deleteChatHistoryOnDisconnect={false}
-      // Автоматическое подключение при монтировании
-      autoConnect={false} // false = ручное подключение
-      // Разрешить работу без микрофона (только прослушивание)
-      allowConnectWithoutMic={true}
-      // Колбеки для отладки
-      onError={error => console.error('❌ Error:', error)}
-      onOpen={dc => console.log('✅ DataChannel opened:', dc?.label)}>
+      allowConnectWithoutMic
+    >
       <SimpleDemoScreen />
     </RealTimeClient>
   );
 }
 
-// ==================== Screen Component ====================
-
 function SimpleDemoScreen() {
   const {
+    client,
     status,
     chat,
     connect,
     disconnect,
-    sendResponseStrict,
-    sendRaw,
     clearChatHistory,
+    sendResponseStrict,
+    addMessage,
   } = useRealtime();
 
-  const {isUserSpeaking, isAssistantSpeaking} = useSpeechActivity();
+  const { isUserSpeaking, isAssistantSpeaking } = useSpeechActivity();
+  const mic = useMicrophoneActivity({ mode: 'auto', pollInterval: 250 });
 
-  const [inputText, setInputText] = useState('');
-  const [isSending, setIsSending] = useState(false);
+  const {
+    initSession,
+    mode,
+    isModeReady,
+    handleSendMessage,
+    cancelAssistantNow,
+    subscribeToAssistantEvents,
+    clientReady,
+  } = useSessionOptions(client);
+
+  const [input, setInput] = useState('');
+  const [log, setLog] = useState<string[]>([]);
+  const [sending, setSending] = useState(false);
 
   const isConnected = status === 'connected';
-  const isConnecting = status === 'connecting';
 
-  // ==================== Handlers ====================
+  useEffect(() => {
+    if (!client) return;
+    const unsubscribe = subscribeToAssistantEvents(() => {
+      setLog(prev => [`assistant:response_started`, ...prev].slice(0, 20));
+    });
+    return () => {
+      try {
+        unsubscribe?.();
+      } catch (error) {
+        console.warn('Failed to unsubscribe', error);
+      }
+    };
+  }, [client, subscribeToAssistantEvents]);
+
+  useEffect(() => {
+    if (status === 'connected' && clientReady && isModeReady === 'idle') {
+      initSession('text').catch(error => {
+        console.warn('Failed to initialise text mode', error);
+      });
+    }
+  }, [status, clientReady, isModeReady, initSession]);
 
   const handleConnect = async () => {
     try {
       await connect();
     } catch (error) {
-      console.error('Failed to connect:', error);
+      console.error('Connect error', error);
     }
   };
 
@@ -117,303 +135,264 @@ function SimpleDemoScreen() {
     try {
       await disconnect();
     } catch (error) {
-      console.error('Failed to disconnect:', error);
+      console.error('Disconnect error', error);
     }
   };
 
-  const handleSendText = async () => {
-    const text = inputText.trim();
-    if (!text || !isConnected) return;
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text) {
+      return;
+    }
 
-    setInputText('');
-    setIsSending(true);
-
+    setSending(true);
     try {
-      // Шаг 1: Создаем пользовательское сообщение
-      await sendRaw({
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'user',
-          content: [{type: 'input_text', text}],
-        },
-      });
-
-      // Шаг 2: Запрашиваем ответ от ассистента
-      await sendResponseStrict({
-        instructions: 'Ответь кратко и по делу.',
-        modalities: ['text'], // Только текстовый ответ
-        conversation: 'auto', // Сохранить контекст
-      });
+      await handleSendMessage(text);
+      setInput('');
     } catch (error) {
-      console.error('Failed to send message:', error);
+      console.error('Failed to send message', error);
     } finally {
-      setIsSending(false);
+      setSending(false);
     }
   };
 
-  const handleQuickVoiceResponse = async () => {
-    if (!isConnected) return;
+  const handleSwitchMode = async (nextMode: 'text' | 'voice') => {
+    try {
+      await initSession(nextMode, nextMode === 'voice' ? { voice: 'verse' } : undefined);
+    } catch (error) {
+      console.error('Failed to switch mode', error);
+    }
+  };
 
+  const handleQuickInstruction = async () => {
     try {
       await sendResponseStrict({
-        instructions: 'Расскажи короткую шутку.',
-        modalities: ['audio', 'text'], // Голосовой + текстовый ответ
+        instructions: 'Give me a two sentence productivity tip.',
+        modalities: mode === 'voice' ? ['audio', 'text'] : ['text'],
         conversation: 'auto',
       });
     } catch (error) {
-      console.error('Failed to send voice response:', error);
+      console.error('Failed to send quick instruction', error);
     }
   };
 
-  // ==================== Render ====================
+  const handleToolHint = () => {
+    const suggested = TOOL_NAMES[Math.floor(Math.random() * TOOL_NAMES.length)];
+    const hint = TOOL_ACK_MESSAGES[suggested];
+    addMessage({
+      type: 'ui',
+      role: 'system',
+      kind: 'hint',
+      payload: {
+        text: `Tool idea → ${suggested}. ${hint ?? 'Ask the assistant to try it.'}`,
+      },
+    });
+  };
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>Simple OpenAI Realtime Demo</Text>
-        <Text style={styles.status}>
-          Status: {status}
-          {isConnected && (
-            <>
-              {isUserSpeaking && ' 🎤 You'}
-              {isAssistantSpeaking && ' 🔊 Assistant'}
-            </>
-          )}
-        </Text>
+    <SafeAreaView style={styles.container}>
+      <View style={styles.section}>
+        <Text style={styles.heading}>Atlas Workspace — Simple Demo</Text>
+        <Text>Status: {status}</Text>
+        <Text>Mode: {mode} ({isModeReady})</Text>
       </View>
 
-      {/* Connection Controls */}
-      <View style={styles.controls}>
-        <Button
-          title={isConnecting ? 'Connecting...' : 'Connect'}
-          onPress={handleConnect}
-          disabled={isConnected || isConnecting}
-        />
-        <Button
-          title="Disconnect"
-          onPress={handleDisconnect}
-          disabled={!isConnected}
-        />
-        <Button
-          title="Clear Chat"
-          onPress={clearChatHistory}
-          disabled={!isConnected}
-        />
-      </View>
-
-      {/* Quick Actions */}
-      {isConnected && (
-        <View style={styles.quickActions}>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Connection</Text>
+        <View style={styles.row}>
           <Button
-            title="🎙️ Tell a Joke (Voice)"
-            onPress={handleQuickVoiceResponse}
+            title={status === 'connecting' ? 'Connecting…' : 'Connect'}
+            onPress={handleConnect}
+            disabled={status === 'connecting' || isConnected}
           />
+          <Button title="Disconnect" onPress={handleDisconnect} disabled={!isConnected} />
+          <Button title="Clear chat" onPress={clearChatHistory} disabled={!chat.length} />
         </View>
-      )}
+      </View>
 
-      {/* Chat Messages */}
-      <View style={styles.chatContainer}>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Modes</Text>
+        <View style={styles.row}>
+          <Button title="Text mode" onPress={() => handleSwitchMode('text')} disabled={mode === 'text'} />
+          <Button title="Voice mode" onPress={() => handleSwitchMode('voice')} disabled={mode === 'voice'} />
+          <Button title="Stop assistant" onPress={cancelAssistantNow} disabled={!isConnected} />
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Activity</Text>
+        <Text>User speaking: {isUserSpeaking ? '🟢' : '⚪'}</Text>
+        <Text>Assistant speaking: {isAssistantSpeaking ? '🟢' : '⚪'}</Text>
+        <Text>Mic active: {mic.isMicActive ? '🟢' : '⚪'} • Level: {(mic.level * 100).toFixed(0)}%</Text>
+      </View>
+
+      <View style={[styles.section, styles.chatSection]}>
+        <Text style={styles.sectionTitle}>Chat ({chat.length})</Text>
         <FlatList
           data={chat}
           keyExtractor={item => item.id}
-          inverted // Новые сообщения снизу
-          renderItem={({item}) => (
-            <ChatMessage message={item as ExtendedChatMsg} />
-          )}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>
-                {!isConnected
-                  ? 'Connect to start chatting'
-                  : 'No messages yet. Start a conversation!'}
-              </Text>
-            </View>
-          }
+          renderItem={({ item }) => <ChatBubble message={item as ExtendedChatMsg} />}
+          inverted
+          contentContainerStyle={styles.chatList}
+          ListEmptyComponent={<Text style={styles.empty}>Start the conversation.</Text>}
         />
       </View>
 
-      {/* Input */}
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Type a message..."
-          value={inputText}
-          onChangeText={setInputText}
-          editable={isConnected && !isSending}
-          onSubmitEditing={handleSendText}
-          returnKeyType="send"
-        />
-        <Button
-          title={isSending ? '...' : 'Send'}
-          onPress={handleSendText}
-          disabled={!isConnected || isSending || !inputText.trim()}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Send message</Text>
+        <View style={styles.row}>
+          <TextInput
+            style={styles.input}
+            value={input}
+            onChangeText={setInput}
+            placeholder="Ask the assistant…"
+            editable={isConnected && !sending}
+          />
+          <Button title={sending ? '...' : 'Send'} onPress={handleSend} disabled={!isConnected || !input.trim() || sending} />
+        </View>
+        <View style={styles.row}>
+          <Button title="Quick tip" onPress={handleQuickInstruction} disabled={!isConnected} />
+          <Button title="Suggest a tool" onPress={handleToolHint} />
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Assistant events</Text>
+        <FlatList
+          data={log}
+          keyExtractor={(_, index) => String(index)}
+          renderItem={({ item }) => <Text style={styles.logItem}>{item}</Text>}
+          ListEmptyComponent={<Text style={styles.empty}>No events yet</Text>}
         />
       </View>
 
-      {/* Loading Indicator */}
-      {isSending && (
-        <View style={styles.loadingContainer}>
+      {!isConnected && status === 'connecting' && (
+        <View style={styles.overlay}>
           <ActivityIndicator />
-          <Text style={styles.loadingText}>Sending...</Text>
+          <Text style={styles.overlayText}>Connecting…</Text>
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
-// ==================== Chat Message Component ====================
-
-function ChatMessage({message}: {message: ExtendedChatMsg}) {
+function ChatBubble({ message }: { message: ExtendedChatMsg }) {
   if (message.type === 'ui') {
-    // UI сообщения (кастомные элементы)
     return (
-      <View style={[styles.message, styles.messageUI]}>
-        <Text style={styles.messageRole}>UI: {message.kind}</Text>
-        <Text>{JSON.stringify(message.payload)}</Text>
+      <View style={[styles.bubble, styles.bubbleUi]}>
+        <Text style={styles.bubbleMeta}>UI · {message.kind}</Text>
+        <Text style={styles.bubbleText}>{JSON.stringify(message.payload, null, 2)}</Text>
       </View>
     );
   }
 
-  // Текстовые сообщения из ChatStore
   const isUser = message.role === 'user';
-  const isStreaming = message.status === 'streaming';
-
   return (
-    <View
-      style={[
-        styles.message,
-        isUser ? styles.messageUser : styles.messageAssistant,
-      ]}>
-      <Text style={styles.messageRole}>
+    <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
+      <Text style={styles.bubbleMeta}>
         {message.role}
-        {isStreaming && ' (typing...)'}
+        {message.status === 'streaming' ? ' (typing…)' : ''}
       </Text>
-      <Text style={styles.messageText}>{message.text || '...'}</Text>
-      <Text style={styles.messageTime}>
-        {new Date(message.time).toLocaleTimeString()}
-      </Text>
+      <Text style={styles.bubbleText}>{message.text ?? '…'}</Text>
     </View>
   );
 }
 
-// ==================== Styles ====================
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  section: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e2e8f0',
     backgroundColor: '#fff',
   },
-  header: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-    backgroundColor: '#f9fafb',
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
+  heading: {
+    fontSize: 18,
+    fontWeight: '600',
     marginBottom: 4,
   },
-  status: {
+  sectionTitle: {
     fontSize: 14,
-    color: '#6b7280',
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#1f2937',
   },
-  controls: {
+  row: {
     flexDirection: 'row',
-    padding: 12,
-    gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  quickActions: {
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  chatContainer: {
-    flex: 1,
-    backgroundColor: '#f9fafb',
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    padding: 40,
+    gap: 8,
+    flexWrap: 'wrap',
   },
-  emptyText: {
-    fontSize: 16,
-    color: '#9ca3af',
-    textAlign: 'center',
+  chatSection: {
+    flex: 1,
+    minHeight: 220,
   },
-  message: {
+  chatList: {
+    gap: 8,
+    paddingBottom: 8,
+  },
+  bubble: {
     padding: 12,
-    marginHorizontal: 12,
-    marginVertical: 6,
-    borderRadius: 8,
-    maxWidth: '80%',
+    borderRadius: 10,
+    maxWidth: '90%',
   },
-  messageUser: {
+  bubbleUser: {
     alignSelf: 'flex-end',
     backgroundColor: '#dbeafe',
   },
-  messageAssistant: {
+  bubbleAssistant: {
     alignSelf: 'flex-start',
     backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#cbd5f5',
   },
-  messageUI: {
+  bubbleUi: {
     alignSelf: 'center',
     backgroundColor: '#fef3c7',
   },
-  messageRole: {
+  bubbleMeta: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#6b7280',
+    color: '#475569',
     marginBottom: 4,
   },
-  messageText: {
-    fontSize: 16,
-    color: '#111827',
-  },
-  messageTime: {
-    fontSize: 10,
-    color: '#9ca3af',
-    marginTop: 4,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    padding: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
-    backgroundColor: '#fff',
-    gap: 8,
+  bubbleText: {
+    fontSize: 14,
+    color: '#0f172a',
   },
   input: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#cbd5f5',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    fontSize: 16,
+    backgroundColor: '#fff',
   },
-  loadingContainer: {
+  empty: {
+    textAlign: 'center',
+    color: '#94a3b8',
+  },
+  logItem: {
+    fontSize: 12,
+    color: '#0f172a',
+    marginBottom: 2,
+  },
+  overlay: {
     position: 'absolute',
-    bottom: 70,
-    alignSelf: 'center',
-    flexDirection: 'row',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 8,
+    backgroundColor: 'rgba(15, 23, 42, 0.08)',
   },
-  loadingText: {
-    color: '#fff',
-    fontSize: 14,
+  overlayText: {
+    marginTop: 8,
+    color: '#0f172a',
   },
 });

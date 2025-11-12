@@ -2222,86 +2222,85 @@ import {
   type RealTimeClientHandle,
   createSpeechActivityMiddleware,
 } from 'react-native-openai-realtime';
+import {
+  TOOL_ACK_MESSAGES,
+  WORKSPACE_INSTRUCTIONS,
+  WORKSPACE_TOOLS,
+  type WorkspaceToolName,
+} from './workspaceScenario';
 
 const SERVER_BASE = 'http://localhost:8787';
 
 const tokenProvider = async () => {
-  const r = await fetch(`${SERVER_BASE}/realtime/session`);
-  const j = await r.json();
-  return j.client_secret.value;
+  const response = await fetch(`${SERVER_BASE}/realtime/session`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch token: ${response.status}`);
+  }
+  const json = await response.json();
+  return json.client_secret.value;
 };
 
-export const GlobalRealtimeProvider: React.FC<{
-  children: React.ReactNode;
-}> = ({ children }) => {
-  const incomingMiddleware = useMemo(
-    () => [createSpeechActivityMiddleware()],
-    []
-  );
+export const GlobalRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const incomingMiddleware = useMemo(() => [createSpeechActivityMiddleware()], []);
   const rtcRef = useRef<RealTimeClientHandle | null>(null);
 
   return (
     <RealTimeClient
       ref={rtcRef}
       tokenProvider={tokenProvider}
-      onError={(e) => console.error('Realtime error:', e)}
-      onToolCall={async ({ name, args }) => {
-        try {
-          const isFlights =
-            name === 'search_flights' || name === 'SearchTripByAirplane';
-          const isPros =
-            name === 'search_professionals' || name === 'SearchProfessionals';
-          if (!isFlights && !isPros) return undefined;
-
-          const url = isFlights
-            ? `${SERVER_BASE}/api/search_flights`
-            : `${SERVER_BASE}/api/search`;
-          const resp = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(args ?? {}),
-          });
-          const data = await resp.json();
-
-          rtcRef.current?.addMessage({
-            type: 'ui',
-            role: 'assistant',
-            kind: isFlights ? 'flights' : 'professionals',
-            payload: {
-              total: Number(data?.total ?? 0),
-              items: Array.isArray(data?.items) ? data.items : [],
-            },
-          });
-
-          // Верните результат — библиотека отправит function_call_output и инициирует response.create
-          return data;
-        } catch (e: any) {
-          rtcRef.current?.addMessage({
-            type: 'ui',
-            role: 'assistant',
-            kind: 'error',
-            payload: { error: e?.message || String(e) },
-          });
-          return { error: e?.message || String(e) };
-        }
-      }}
+      initializeMode={{ type: 'text' }}
       session={{
         model: 'gpt-4o-realtime-preview-2024-12-17',
         voice: 'shimmer',
-        input_audio_transcription: { model: 'whisper-1' }, // или 'gpt-4o-transcribe'
         modalities: ['audio', 'text'],
+        input_audio_transcription: { model: 'whisper-1' },
         turn_detection: {
           type: 'server_vad',
-          threshold: 0.7,
+          threshold: 0.55,
           prefix_padding_ms: 250,
-          silence_duration_ms: 800,
+          silence_duration_ms: 900,
         },
+        tools: WORKSPACE_TOOLS,
+        instructions: WORKSPACE_INSTRUCTIONS,
       }}
+      allowConnectWithoutMic
       incomingMiddleware={incomingMiddleware}
-      chatEnabled
-      chatInverted={false}
-      deleteChatHistoryOnDisconnect={false}
-      autoConnect={false}
+      onToolCall={async ({ name, args }) => {
+        if (name === 'list_workspaces') {
+          return {
+            items: [
+              { id: 'studio-soho', name: 'Soho Workshop Loft', city: 'New York' },
+            ],
+          };
+        }
+        if (name === 'calculate_workspace_quote') {
+          return {
+            quote_id: `quote-${Date.now()}`,
+            subtotal: 420,
+            currency: 'USD',
+            city: args.city,
+          };
+        }
+        return undefined;
+      }}
+      onEvent={(event) => {
+        if (
+          event?.type === 'response.function_call_arguments.done' &&
+          event?.name
+        ) {
+          const example = TOOL_ACK_MESSAGES[event.name as WorkspaceToolName];
+          if (example) {
+            rtcRef.current?.addMessage({
+              type: 'ui',
+              role: 'assistant',
+              kind: 'acknowledgement_template',
+              payload: { tool: event.name, example },
+            });
+          }
+        }
+      }}
     >
       {children}
     </RealTimeClient>
