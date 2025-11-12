@@ -297,251 +297,29 @@ if (localStream) {
     instructions: 'Твои инструкции',
     tools: tools,
   }}
+  initializeMode={{ type: 'text' }}
   autoSessionUpdate={true} // ← Важно: автоматическое применение сессии
 >
   <YourScreen />
 </RealTimeClient>
 ```
 
-**Шаг 2:** Инициализируйте текстовый режим при монтировании:
+- `autoSessionUpdate={true}` (по умолчанию): автоматически отправляет конфигурацию из пропа `session` на сервер после успешного подключения (`status='connected'`). Это означает, что все параметры сессии (модель, голос, модальности, VAD, транскрипция и т.д.) применяются автоматически.
 
-```tsx
-import { useSessionOptions, useRealtime } from 'react-native-openai-realtime';
-import { useEffect } from 'react';
+- `autoSessionUpdate={false}`: отключает автоматическую отправку сессии. В этом случае вам нужно будет вручную вызывать `updateSession()` или `sendRaw()` для отправки конфигурации сессии на сервер (того что вы передали внутрь session prop). Без этого сессия не будет применена, и VAD не будет работать.
 
-function YourScreen() {
-  const { client, status } = useRealtime();
-  const { initSession, mode, isModeReady } = useSessionOptions(client!);
+### Проп `initializeMode`
 
-  // ✅ КРИТИЧНО: Инициализация текстового режима
-  useEffect(() => {
-    if (status === 'connected') {
-      initSession('text').catch(console.error);
-    }
-  }, [status, isModeReady]);
+Проп `initializeMode` позволяет автоматически инициализировать нужный режим сессии после успешного подключения и после удачных переподключений.
 
-  // Теперь можно безопасно переключаться
-  const switchToVoice = () => initSession('voice');
-  const switchToText = () => initSession('text');
+**Параметры:**
 
-  return (
-    <View>
-      <Text>Current mode: {mode}</Text>
-      <Text>Status: {isModeReady}</Text>
-      <Button title="Voice Mode" onPress={switchToVoice} />
-      <Button title="Text Mode" onPress={switchToText} />
-    </View>
-  );
-}
-```
+- `type` (обязательный): `'text'` | `'voice'` — тип сессии для инициализации
+- `options` (опциональный): `Partial<any>` — дополнительные параметры, которые будут переданы в `initSession()` (принимает те же параметры, что и объект session)
 
-> Нужно автоматизировать начальную инициализацию? Передайте проп `initializeMode={{ type: 'text' }}` (или `'voice'`) в `RealTimeClient` — провайдер сам вызовет `initSession()` после первого успешного подключения и после удачных переподключений.
+**Примеры использования:**
 
----
-
-### Как это работает
-
-1. **При подключении** (`status='connected'`):
-   - Сервер получает полную конфигурацию с VAD и транскрипцией
-   - WebRTC соединение устанавливается с поддержкой аудио
-
-2. **При вызове `initSession('text')`**:
-   - Отправляется `session.update` с `modalities: ['text']`
-   - VAD остается активным, но игнорируется
-   - Микрофон **не отключается** физически (треки остаются)
-
-3. **При вызове `initSession('voice')`**:
-   - Отправляется `session.update` с `modalities: ['audio', 'text']`
-   - VAD активируется
-   - Включается спикер (InCallManager)
-   - Режим переключается без ре-негоциации
-
----
-
-### Последовательность действий `initSession()`
-
-**Для `initSession('text')`:**
-
-```ts
-1. Отмена текущего ответа ассистента (cancelAssistantNow)
-2. Отключение удаленных аудио треков (setRemoteTracksEnabled)
-3. Отключение микрофона (setMicrophoneEnabled)
-4. Остановка InCallManager
-5. session.update({ modalities: ['text'], turn_detection: null })
-6. Смена внутреннего состояния mode='text'
-```
-
-**Для `initSession('voice')`:**
-
-```ts
-1. session.update({
-     modalities: ['audio', 'text'],
-     turn_detection: { type: 'server_vad', ... }
-   })
-2. Задержка 300ms (применение сессии)
-3. Запуск InCallManager (AEC/спикер)
-4. Включение удаленных аудио треков
-5. Включение микрофона
-6. Смена внутреннего состояния mode='voice'
-```
-
----
-
-### ⚠️ Что НЕ НУЖНО делать
-
-**❌ Неправильно:**
-
-```tsx
-// НЕ отключайте VAD и транскрипцию в начальной сессии
-session={{
-  modalities: ['text'],
-  turn_detection: null,           // ← Проблема
-  input_audio_transcription: null // ← Проблема
-}}
-```
-
-**❌ Неправильно:**
-
-```tsx
-// НЕ используйте autoSessionUpdate={false} без явной инициализации
-<RealTimeClient autoSessionUpdate={false} ... />
-// Сессия не применится → VAD не будет работать
-```
-
-**❌ Неправильно:**
-
-```tsx
-// НЕ вызывайте initSession до подключения
-useEffect(() => {
-  initSession('text'); // ← Ошибка: DataChannel не открыт
-}, []);
-```
-
----
-
-### Полный рабочий пример
-
-```tsx
-import {
-  RealTimeClient,
-  useRealtime,
-  useSessionOptions,
-  useSpeechActivity,
-} from 'react-native-openai-realtime';
-import { useEffect } from 'react';
-
-// Провайдер с полной конфигурацией
-function App() {
-  return (
-    <RealTimeClient
-      tokenProvider={async () => {
-        const r = await fetch('http://localhost:8787/realtime/session');
-        const j = await r.json();
-        return j.client_secret.value;
-      }}
-      session={{
-        model: 'gpt-4o-realtime-preview-2024-12-17',
-        voice: 'shimmer',
-        modalities: ['audio', 'text'], // ← Оба режима
-        turn_detection: {
-          // ← VAD включен
-          type: 'server_vad',
-          threshold: 0.6,
-          silence_duration_ms: 1200,
-        },
-        input_audio_transcription: {
-          // ← Транскрипция включена
-          model: 'whisper-1',
-        },
-        instructions: 'Будь полезным ассистентом',
-      }}
-      autoSessionUpdate={true}
-      greetEnabled={false} // Отключаем авто-приветствие
-    >
-      <ChatScreen />
-    </RealTimeClient>
-  );
-}
-
-// Экран с корректной инициализацией
-function ChatScreen() {
-  const { client, status, chat } = useRealtime();
-  const { isUserSpeaking, isAssistantSpeaking } = useSpeechActivity();
-
-  const {
-    initSession,
-    mode,
-    isModeReady,
-    handleSendMessage,
-    cancelAssistantNow,
-  } = useSessionOptions(client!);
-
-  // ✅ Инициализация текстового режима
-  useEffect(() => {
-    if (status === 'connected' && isModeReady === 'idle') {
-      console.log('Initializing text mode...');
-      initSession('text').catch(console.error);
-    }
-  }, [status, isModeReady]);
-
-  const switchMode = async (newMode: 'text' | 'voice') => {
-    try {
-      await initSession(newMode);
-      console.log(`Switched to ${newMode} mode`);
-    } catch (e) {
-      console.error('Failed to switch mode:', e);
-    }
-  };
-
-  return (
-    <View>
-      {/* Статус */}
-      <Text>Connection: {status}</Text>
-      <Text>Mode: {mode}</Text>
-      <Text>Ready: {isModeReady}</Text>
-
-      {/* Индикаторы */}
-      {isUserSpeaking && <Text>🎤 Вы говорите...</Text>}
-      {isAssistantSpeaking && <Text>🔊 Ассистент отвечает...</Text>}
-
-      {/* Переключатель режимов */}
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Button
-          title="Text Mode"
-          onPress={() => switchMode('text')}
-          disabled={mode === 'text' || isModeReady !== 'connected'}
-        />
-        <Button
-          title="Voice Mode"
-          onPress={() => switchMode('voice')}
-          disabled={mode === 'voice' || isModeReady !== 'connected'}
-        />
-      </View>
-
-      {/* Отправка текста */}
-      {mode === 'text' && (
-        <TextInput
-          onSubmitEditing={(e) => handleSendMessage(e.nativeEvent.text)}
-          placeholder="Введите сообщение..."
-        />
-      )}
-
-      {/* Отмена */}
-      <Button title="Stop Assistant" onPress={cancelAssistantNow} />
-
-      {/* Чат */}
-      <FlatList
-        data={chat}
-        renderItem={({ item }) => (
-          <Text>
-            {item.role}: {item.text}
-          </Text>
-        )}
-      />
-    </View>
-  );
-}
-```
+Провайдер автоматически вызовет `initSession()` с указанным типом после первого успешного подключения и после каждого удачного переподключения.
 
 ---
 
@@ -702,6 +480,7 @@ export type RealTimeClientHandle = {
   disconnect: () => Promise<void>;
 
   // Микрофон и медиа
+  // НЕ РЕКОМЕНДОВАНО ИСПОЛЬЗОВАТЬ! В разработке
   enableMicrophone: () => Promise<void>;
   disableMicrophone: () => Promise<void>;
 
@@ -1025,160 +804,35 @@ function SpeechIndicator() {
 
 Зачем: чтобы рисовать индикатор уровней, подсвечивать PTT, детектировать молчание/речь, отслеживать голос ассистента.
 
-**Пример использования:**
-
-```tsx
-import { useMicrophoneActivity } from 'react-native-openai-realtime';
-
-function VolumeIndicator() {
-  const { isMicActive, level, remoteLevel, isCapturing } =
-    useMicrophoneActivity();
-
-  return (
-    <View>
-      {/* Индикатор микрофона пользователя */}
-      <Text>🎤 Mic: {isMicActive ? 'Active' : 'Inactive'}</Text>
-      <ProgressBar progress={level} color="blue" />
-
-      {/* Индикатор голоса ассистента */}
-      <Text>🔊 Assistant: {remoteLevel > 0.02 ? 'Speaking' : 'Silent'}</Text>
-      <ProgressBar progress={remoteLevel} color="green" />
-
-      {/* Статус захвата */}
-      <Text>Capturing: {isCapturing ? '✅' : '❌'}</Text>
-    </View>
-  );
-}
-```
-
 ### useSessionOptions(client)
 
 **Назначение:** Управление режимами работы (voice/text) и манипуляции с сессией.
 
 **Параметры:**
 
-| Параметр | Тип                   | Описание                         |
-| -------- | --------------------- | -------------------------------- |
-| client   | `RealtimeClientClass` | Экземпляр клиента (обязательный) |
+| Параметр | Тип                           | Описание                              |
+| -------- | ----------------------------- | ------------------------------------- |
+| client   | `RealtimeClientClass \| null` | Экземпляр клиента (может быть `null`) |
 
 **Возвращаемые методы и состояния:**
 
-| Метод/Поле                   | Тип                                                       | Описание                                               |
-| ---------------------------- | --------------------------------------------------------- | ------------------------------------------------------ |
-| `initSession(mode)`          | `(mode: 'voice' \| 'text') => Promise<void>`              | Инициализация режима после подключения                 |
-| `isModeReady`                | `'idle' \| 'connecting' \| 'connected' \| 'disconnected'` | Статус готовности режима                               |
-| `mode`                       | `'text' \| 'voice'`                                       | Текущий активный режим                                 |
-| `clientReady`                | `boolean`                                                 | Есть валидный клиент (можно дергать initSession/проч.) |
-| `cancelAssistantNow`         | `(onComplete?, onFail?) => Promise<void>`                 | Отмена текущего ответа ассистента                      |
-| `handleSendMessage`          | `(text: string) => Promise<void>`                         | Отправка текстового сообщения                          |
-| `subscribeToAssistantEvents` | `(onAssistantStarted?) => () => void`                     | Подписка на события ассистента                         |
-
-**Пример использования:**
-
-```tsx
-import { useSessionOptions, useRealtime } from 'react-native-openai-realtime';
-import { useState, useEffect } from 'react';
-
-function ChatScreen() {
-  const { client, status } = useRealtime();
-
-  const {
-    initSession,
-    isModeReady,
-    mode,
-    cancelAssistantNow,
-    handleSendMessage,
-    clientReady,
-  } = useSessionOptions(client!);
-
-  // ✅ КРИТИЧНО: Инициализация текстового режима при монтировании
-  useEffect(() => {
-    if (status === 'connected' && clientReady && isModeReady === 'idle') {
-      initSession('text').catch(console.error);
-    }
-  }, [status, clientReady, isModeReady]);
-
-  // Переключение в голосовой режим
-  const enableVoice = async () => {
-    try {
-      await initSession('voice');
-    } catch (e) {
-      console.error('Failed to enable voice:', e);
-    }
-  };
-
-  // Переключение в текстовый режим
-  const enableText = async () => {
-    try {
-      await initSession('text');
-    } catch (e) {
-      console.error('Failed to enable text:', e);
-    }
-  };
-
-  // Отправка текста
-  const sendText = async (text: string) => {
-    try {
-      await handleSendMessage(text);
-    } catch (e) {
-      console.error('Failed to send:', e);
-    }
-  };
-
-  // Прерывание ассистента
-  const stopAssistant = async () => {
-    await cancelAssistantNow();
-  };
-
-  return (
-    <View>
-      <Text>Mode: {mode}</Text>
-      <Text>Ready: {isModeReady}</Text>
-      <Button
-        title="Voice Mode"
-        onPress={enableVoice}
-        disabled={mode === 'voice'}
-      />
-      <Button
-        title="Text Mode"
-        onPress={enableText}
-        disabled={mode === 'text'}
-      />
-      <Button title="Stop Assistant" onPress={stopAssistant} />
-    </View>
-  );
-}
-```
-
-**Внутренняя механика:**
-
-```ts
-// initSession('text') последовательность:
-1. Отмена текущего ответа ассистента (cancelAssistantNow)
-2. Отключение удаленных аудио треков (setRemoteTracksEnabled)
-3. Отключение микрофона (setMicrophoneEnabled)
-4. Остановка InCallManager
-5. session.update({ modalities: ['text'], turn_detection: null })
-6. Смена внутреннего состояния mode='text'
-
-// initSession('voice') последовательность:
-1. session.update({
-     modalities: ['audio', 'text'],
-     turn_detection: { type: 'server_vad', ... }
-   })
-2. Задержка 300ms (применение сессии)
-3. Запуск InCallManager (AEC/спикер)
-4. Включение удаленных аудио треков
-5. Включение микрофона
-6. Смена внутреннего состояния mode='voice'
-```
+| Метод/Поле                         | Тип                                                                       | Описание                                                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `initSession(mode, customParams?)` | `(mode: 'text' \| 'voice', customParams?: Partial<any>) => Promise<void>` | Инициализация режима после подключения. `customParams` — дополнительные параметры сессии, которые будут объединены с дефолтными |
+| `isModeReady`                      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected'`                 | Статус готовности режима                                                                                                        |
+| `mode`                             | `'text' \| 'voice'`                                                       | Текущий активный режим                                                                                                          |
+| `clientReady`                      | `boolean`                                                                 | Есть валидный клиент (можно дергать initSession/проч.)                                                                          |
+| `cancelAssistantNow`               | `(onComplete?, onFail?) => Promise<void>`                                 | Отмена текущего ответа ассистента                                                                                               |
+| `handleSendMessage`                | `(text: string) => Promise<void>`                                         | Отправка текстового сообщения                                                                                                   |
+| `subscribeToAssistantEvents`       | `(onAssistantStarted?) => () => void`                                     | Подписка на события ассистента (возвращает функцию отписки)                                                                     |
 
 **Важно:**
 
 - Дождитесь `clientReady === true` — это значит, что хук получил реальный экземпляр клиента и может управлять сессией.
 - Методы асинхронные, обрабатывайте try/catch
-- `initSession()` требует активного соединения (status='connected')
-- `initSession('text')` не отключает микрофон физически (треки остаются enabled)
+- `initSession()` требует активного соединения и открытого DataChannel (проверяется автоматически, таймаут 5 секунд)
+- `initSession('text')` отключает микрофон программно (`track.enabled = false`), но треки остаются в потоке
+- `initSession()` не запускает повторную инициализацию, если предыдущая еще выполняется
 - **КРИТИЧНО:** Инициализируйте режим после подключения (см. раздел "Правильная инициализация для переключения режимов")
 
 ---
@@ -1205,30 +859,13 @@ function ChatScreen() {
 
 - `error` — { scope, error } — ошибки от сервера (realtime)
 
-### Карта входящих onEvent → удобные события:
+### События
 
-| Raw event (onEvent.type)                              | Эмит                       | Payload                                            |
-| ----------------------------------------------------- | -------------------------- | -------------------------------------------------- |
-| conversation.item.created (role=user)                 | user:item_started          | { itemId }                                         |
-| conversation.item.created (role=assistant)            | assistant:item_started     | { itemId }                                         |
-| conversation.item.input_audio_transcription.delta     | user:delta                 | { itemId, delta }                                  |
-| conversation.item.input_audio_transcription.completed | user:completed             | { itemId, transcript }                             |
-| conversation.item.input_audio_transcription.failed    | user:failed                | { itemId, error }                                  |
-| conversation.item.truncated                           | user:truncated             | { itemId }                                         |
-| response.created                                      | assistant:response_started | { responseId }                                     |
-| response.text.delta                                   | assistant:delta            | { responseId, delta, channel: 'output_text' }      |
-| response.output_item.text.delta                       | assistant:delta            | { responseId, delta, channel: 'output_text' }      |
-| response.output_text.delta                            | assistant:delta            | { responseId, delta, channel: 'output_text' }      |
-| response.audio_transcript.delta                       | assistant:delta            | { responseId, delta, channel: 'audio_transcript' } |
-| response.text.done                                    | assistant:completed        | { responseId, status: 'done' }                     |
-| response.output_item.text.done                        | assistant:completed        | { responseId, status: 'done' }                     |
-| response.output_text.done                             | assistant:completed        | { responseId, status: 'done' }                     |
-| response.completed                                    | assistant:completed        | { responseId, status: 'done' }                     |
-| response.canceled                                     | assistant:completed        | { responseId, status: 'canceled' }                 |
-| response.audio_transcript.done                        | assistant:completed        | { responseId, status: 'done' }                     |
-| response.function_call_arguments.delta                | tool:call_delta            | { call_id, name, delta }                           |
-| response.function_call_arguments.done                 | tool:call_done             | { call_id, name, args }                            |
-| error                                                 | error                      | { scope: 'server', error }                         |
+Для полного списка всех доступных событий которые возвращает onEvent prop и их описания обратитесь к официальной документации OpenAI:
+
+**Документация:** [https://platform.openai.com/docs/api-reference/realtime-client-events/session/update](https://platform.openai.com/docs/api-reference/realtime-client-events/session/update)
+
+Начните с раздела о событиях сессии и листайте документацию ниже для просмотра всех доступных событий.
 
 ### Обработка ошибок парсинга JSON
 
@@ -1861,8 +1498,7 @@ new RealtimeClientClass(
 
 Класс защищен от повторных вызовов методов подключения/отключения:
 
-- При попытке повторного вызова `connect()` во время подключения — операция будет проигнорирована с предупреждением
-- При попытке повторного вызова `disconnect()` во время отключения — операция будет проигнорирована
+- При попытке повторного вызова `connect()` | `disconnect()` во время подключения | отключения — операция будет проигнорирована с предупреждением
 - Рекомендуется проверять статус соединения через `getStatus()` или `isConnected()` перед вызовом методов
 
 ### SuccessHandler / SuccessCallbacks (все)
@@ -1979,59 +1615,6 @@ type ErrorEvent = {
 ---
 
 ## Константы, DEFAULTS и applyDefaults
-
-**DEFAULTS** — значения по умолчанию:
-
-```ts
-{
-  tokenProvider: async () => throw new Error('tokenProvider is required'),
-  webrtc: {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
-    ],
-    dataChannelLabel: 'oai-events',
-    offerOptions: {
-      offerToReceiveAudio: true,
-      voiceActivityDetection: true,
-    },
-    configuration: { iceCandidatePoolSize: 10 }
-  },
-  media: {
-    getUserMedia: {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: false
-    }
-  },
-  session: {
-    model: 'gpt-4o-realtime-preview-2024-12-17',
-    voice: 'alloy',
-    modalities: ['audio', 'text'],
-    input_audio_transcription: { model: 'whisper-1' },
-    turn_detection: {
-      type: 'server_vad',
-      silence_duration_ms: 700,
-      prefix_padding_ms: 300,
-      threshold: 0.5
-    }
-  },
-  autoSessionUpdate: true,
-  greet: {
-    enabled: true,
-    response: {
-      instructions: 'Привет! Я на связи и готов помочь.',
-      modalities: ['audio', 'text']
-    }
-  },
-  policy: { isMeaningfulText: (t) => !!t.trim() },
-  chat: { enabled: true, isMeaningfulText: (t) => !!t.trim() },
-  logger: { debug, info, warn, error: console.* }
-}
-```
 
 **Важно**:
 
@@ -2185,131 +1768,6 @@ deepMerge({ arr: [1, 2], obj: { a: 1 } }, { arr: [3], obj: { b: 2 } });
 
 **Пример:**
 
-```ts
-import InCallManager from 'react-native-incall-manager';
-
-useEffect(() => {
-  if (status === 'connected') {
-    InCallManager.start({ media: 'audio' });
-    InCallManager.setForceSpeakerphoneOn(true); // маршрут: на динамик (true) или в ухо (false)
-  } else {
-    InCallManager.stop();
-  }
-}, [status]);
-```
-
-**(Опционально)** Глушение микрофона на время речи ассистента:
-
-```ts
-client.on('assistant:response_started', () => {
-  const local = client.getLocalStream?.();
-  local?.getAudioTracks?.()?.forEach((t) => (t.enabled = false));
-});
-client.on('assistant:completed', () => {
-  const local = client.getLocalStream?.();
-  local?.getAudioTracks?.()?.forEach((t) => (t.enabled = true));
-});
-```
-
-### GlobalRealtimeProvider с ref и onToolCall
-
-Расширенный пример глобального провайдера, который использует `ref` для добавления UI‑сообщений из `onToolCall`. См. раздел "Быстрый старт" для базового примера подключения.
-
-```tsx
-import React, { useMemo, useRef } from 'react';
-import {
-  RealTimeClient,
-  type RealTimeClientHandle,
-  createSpeechActivityMiddleware,
-} from 'react-native-openai-realtime';
-import {
-  TOOL_ACK_MESSAGES,
-  WORKSPACE_INSTRUCTIONS,
-  WORKSPACE_TOOLS,
-  type WorkspaceToolName,
-} from './workspaceScenario';
-
-const SERVER_BASE = 'http://localhost:8787';
-
-const tokenProvider = async () => {
-  const response = await fetch(`${SERVER_BASE}/realtime/session`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch token: ${response.status}`);
-  }
-  const json = await response.json();
-  return json.client_secret.value;
-};
-
-export const GlobalRealtimeProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
-  const incomingMiddleware = useMemo(() => [createSpeechActivityMiddleware()], []);
-  const rtcRef = useRef<RealTimeClientHandle | null>(null);
-
-  return (
-    <RealTimeClient
-      ref={rtcRef}
-      tokenProvider={tokenProvider}
-      initializeMode={{ type: 'text' }}
-      session={{
-        model: 'gpt-4o-realtime-preview-2024-12-17',
-        voice: 'shimmer',
-        modalities: ['audio', 'text'],
-        input_audio_transcription: { model: 'whisper-1' },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.55,
-          prefix_padding_ms: 250,
-          silence_duration_ms: 900,
-        },
-        tools: WORKSPACE_TOOLS,
-        instructions: WORKSPACE_INSTRUCTIONS,
-      }}
-      allowConnectWithoutMic
-      incomingMiddleware={incomingMiddleware}
-      onToolCall={async ({ name, args }) => {
-        if (name === 'list_workspaces') {
-          return {
-            items: [
-              { id: 'studio-soho', name: 'Soho Workshop Loft', city: 'New York' },
-            ],
-          };
-        }
-        if (name === 'calculate_workspace_quote') {
-          return {
-            quote_id: `quote-${Date.now()}`,
-            subtotal: 420,
-            currency: 'USD',
-            city: args.city,
-          };
-        }
-        return undefined;
-      }}
-      onEvent={(event) => {
-        if (
-          event?.type === 'response.function_call_arguments.done' &&
-          event?.name
-        ) {
-          const example = TOOL_ACK_MESSAGES[event.name as WorkspaceToolName];
-          if (example) {
-            rtcRef.current?.addMessage({
-              type: 'ui',
-              role: 'assistant',
-              kind: 'acknowledgement_template',
-              payload: { tool: event.name, example },
-            });
-          }
-        }
-      }}
-    >
-      {children}
-    </RealTimeClient>
-  );
-};
-```
-
----
-
 ## TypeScript Tips
 
 ### Типизация middleware
@@ -2340,29 +1798,6 @@ const myIncomingMiddleware: IncomingMiddleware = async (ctx: MiddlewareCtx) => {
 const myOutgoingMiddleware: OutgoingMiddleware = (event: any) => {
   if (!event.type) return 'stop'; // Блокируем невалидные
   return event; // Пропускаем
-};
-```
-
-### Типизация хуков
-
-```ts
-import type {
-  RealtimeClientHooks,
-  RealtimeContextValue,
-} from 'react-native-openai-realtime';
-
-const hooks: Partial<RealtimeClientHooks> = {
-  onToolCall: async ({ name, args, call_id }) => {
-    // TypeScript знает типы параметров
-    if (name === 'get_weather') {
-      return { temp: 22, city: args.city };
-    }
-  },
-};
-
-const MyComponent: React.FC = () => {
-  const ctx: RealtimeContextValue = useRealtime();
-  // TypeScript знает все поля контекста
 };
 ```
 
@@ -2419,7 +1854,7 @@ const rtcRef = useRef<RealTimeClientHandle | null>(null);
 
 ```tsx
 session={{
-  model: 'gpt-4o-realtime-preview-2024-12-17',
+  model: 'gpt-4o-realtime-preview-2024-12-17', // `whisper-1` или `gpt-4o-transcribe`
   voice: 'shimmer',
   modalities: ['audio', 'text'],
   input_audio_transcription: {
@@ -2434,75 +1869,6 @@ session={{
     silence_duration_ms: 800
   }
 }}
-```
-
-**Чек‑лист:**
-
-1. ✅ `input_audio_transcription.model` указан (`whisper-1` или `gpt-4o-transcribe`)
-2. ✅ `chatEnabled !== false` (по умолчанию `true`)
-3. ✅ `attachChat !== false` (по умолчанию `true`)
-4. ✅ Микрофон работает (разрешение granted)
-5. ✅ Соединение `status='connected'`
-6. ✅ Хотя бы один `response.create` отправлен (greet или manual)
-7. ✅ События приходят (проверьте `onEvent` лог)
-8. ✅ Для текстовых сообщений: используйте `handleSendMessage()` (из useSessionOptions) или manual sequence
-
-**Правильный минимум:**
-
-```tsx
-<RealTimeClient
-  session={{
-    model: 'gpt-4o-realtime-preview-2024-12-17',
-    voice: 'shimmer',
-    input_audio_transcription: {
-      model: 'whisper-1', // Быстрая транскрипция (рекомендуется)
-      // или 'gpt-4o-transcribe' // Более точная, но медленнее
-    },
-    modalities: ['audio', 'text'],
-    turn_detection: {
-      type: 'server_vad',
-      threshold: 0.7,
-      prefix_padding_ms: 250,
-      silence_duration_ms: 800,
-    },
-  }}
-  autoSessionUpdate={true}
-  greetEnabled={true}
-  // ...
-/>
-```
-
-**Если отключаете server_vad (ручной PTT):**
-
-```ts
-await sendRaw({ type: 'input_audio_buffer.commit' });
-await sendRaw({ type: 'response.create' });
-await sendRaw({ type: 'input_audio_buffer.clear' });
-```
-
-**Для текстового режима:**
-
-```ts
-// ✅ Правильно - через sendTextMessage() (в useSessionOptions)
-handleSendMessage(text, onSuccess, onError);
-
-// ✅ Правильно - ручная отправка
-await sendRaw({
-  type: 'conversation.item.create',
-  item: {
-    type: 'message',
-    role: 'user',
-    content: [{ type: 'input_text', text: 'Привет' }]
-  }
-});
-await sendResponseStrict({
-  instructions: 'Ответь на вопрос',
-  modalities: ['text'],
-  conversation: 'auto' // ← Важно для контекста!
-});
-
-// ❌ Неправильно - только item без response
-await sendRaw({ type: 'conversation.item.create', ... }); // Ничего не произойдет
 ```
 
 **При ручном чате** (`chatEnabled={false}`) собирайте ленту сами по `client.on('user:*', 'assistant:*')`.
