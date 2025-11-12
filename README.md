@@ -183,6 +183,8 @@ function YourScreen() {
    - Если `greetEnabled={true}` → отправка приветственного `response.create`
    - Вызов `onOpen(dc)`
 
+> Статус `'connected'` выставляется только тогда, когда и `RTCPeerConnection`, и `DataChannel` становятся готовыми. Для строгой проверки используйте `client.isFullyConnected()` или подписку `onConnectionStateChange`.
+
 ### Защита от конкурентных вызовов (Concurrent Guards)
 
 Класс `RealtimeClientClass` защищен от повторных вызовов:
@@ -332,6 +334,8 @@ function YourScreen() {
   );
 }
 ```
+
+> Нужно автоматизировать начальную инициализацию? Передайте проп `initializeMode={{ type: 'text' }}` (или `'voice'`) в `RealTimeClient` — провайдер сам вызовет `initSession()` после первого успешного подключения и после удачных переподключений.
 
 ---
 
@@ -620,6 +624,11 @@ useEffect(() => {
 | autoConnect                     | boolean                                                       | false                                | Подключиться сразу.                                                                                    |
 | attachChat                      | boolean                                                       | true                                 | Прикрепить встроенный чат в контекст.                                                                  |
 | allowConnectWithoutMic          | boolean                                                       | true                                 | Разрешить подключение без микрофона (recvonly transceiver).                                            |
+| initializeMode                  | { type: 'text' \| 'voice'; options?: Partial<any> }           | -                                    | Автоматически вызвать initSession после первого успешного подключения (и после удачного reconnect).    |
+| attemptsToReconnect             | number                                                        | 1                                    | Количество автоматических попыток переподключения при статусе 'error'.                                 |
+| onReconnectAttempt              | (attempt: number, max: number) => void                        | -                                    | Коллбек перед каждой попыткой reconnect (счётчик и максимум).                                          |
+| onReconnectSuccess              | () => void                                                    | -                                    | Коллбек после успешного восстановления соединения.                                                     |
+| onReconnectFailed               | (error: any) => void                                          | -                                    | Коллбек после исчерпания попыток reconnect или необработанной ошибки.                                  |
 | children                        | ReactNode или (ctx) => ReactNode                              | -                                    | Если функция — получаете RealtimeContextValue.                                                         |
 
 **Примечания:**
@@ -629,6 +638,8 @@ useEffect(() => {
 - Компонент `RealTimeClient` принимает все Success callbacks из `RealtimeSuccessCallbacks` (onPeerConnectionCreated, onDataChannelOpen и т.д.). См. раздел "SuccessHandler / SuccessCallbacks" для полного списка всех callbacks.
 - **chatInverted** управляет сортировкой в mergedChat: false = новые сверху, true = старые сверху
 - Компонент поддерживает `forwardRef` для императивного API (см. раздел "Императивный API через ref")
+- `initializeMode` использует внутренний хук `useSessionOptions`: метод `initSession()` будет вызван один раз после первого успешного подключения и повторно после удачного автоматического переподключения.
+- При `attemptsToReconnect > 1` компонент автоматически предпринимает повторные `disconnect()` → `connect()` при переходе статуса в `'error'`. Коллбеки `onReconnectAttempt/onReconnectSuccess/onReconnectFailed` помогают отслеживать процесс.
 
 ### attachChat (проп)
 
@@ -653,6 +664,17 @@ useEffect(() => {
 
 **Важно:** `attachChat` не влияет на работу ChatStore — он продолжает накапливать сообщения, доступные через `client.getChat()`.
 
+### Автопереподключение
+
+Если указать `attemptsToReconnect > 1`, компонент начнёт автоматически восстанавливать соединение при переходе статуса в `'error'`:
+
+- Перед каждой попыткой вызывается `onReconnectAttempt(attempt, maxAttempts)`.
+- Последовательность: небольшая пауза → `disconnect()` → пауза → `connect()`.
+- При успехе счётчик попыток сбрасывается, вызывается `onReconnectSuccess()`, а флаг `initializeMode` (если задан) будет применён повторно.
+- Если все попытки исчерпаны, вызывается `onReconnectFailed(error)` — можно отобразить UI для ручного переподключения.
+
+Ручные вызовы `connect()/disconnect()` не конфликтуют с автоматикой: при успешном ручном подключении счётчик попыток также сбрасывается.
+
 ---
 
 ## Императивный API через ref (RealTimeClientHandle)
@@ -672,10 +694,16 @@ export type RealTimeClientHandle = {
     | 'disconnected'
     | 'error';
   setTokenProvider: (tp: TokenProvider) => void;
+  getCurrentMode: () => 'text' | 'voice';
+  getModeStatus: () => 'idle' | 'connecting' | 'connected' | 'disconnected';
 
   // Соединение
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
+
+  // Микрофон и медиа
+  enableMicrophone: () => Promise<void>;
+  disableMicrophone: () => Promise<void>;
 
   // Отправка
   sendRaw: (e: any) => Promise<void> | void;
@@ -686,6 +714,10 @@ export type RealTimeClientHandle = {
     conversation?: 'auto' | 'none';
   }) => void;
   updateSession: (patch: Partial<any>) => void;
+
+  // Переключение режимов сессии
+  switchToTextMode: (customParams?: Partial<any>) => Promise<void>;
+  switchToVoiceMode: (customParams?: Partial<any>) => Promise<void>;
 
   // Чат (локальные UI-бабблы)
   addMessage: (m: AddableMessage | AddableMessage[]) => string | string[];
@@ -736,21 +768,14 @@ export default function App() {
 - `ref` — дополнение к контексту (хуки `useRealtime`/`useSpeechActivity`/`useMicrophoneActivity` продолжают работать как раньше)
 - `addMessage` через `ref` не отправляет событие на сервер — это локальные UI‑пузырьки
 
-### ⚠️ Управление микрофоном (в разработке)
+### Управление микрофоном через ref
 
-Методы `enableMicrophone()` и `disableMicrophone()` находятся в разработке и **не должны использоваться** в текущей версии библиотеки.
+Методы `enableMicrophone()` и `disableMicrophone()` работают поверх того же `RealtimeClientClass`, что и хук `useSessionOptions`, и выполняют полноценную ре-негоциацию WebRTC.
 
-**Альтернативы:**
-
-- **Для включения/выключения микрофона:** Управляйте треками вручную:
-
-  ```ts
-  const local = client.getLocalStream();
-  local?.getAudioTracks().forEach((t) => (t.enabled = false)); // выключить
-  local?.getAudioTracks().forEach((t) => (t.enabled = true)); // включить
-  ```
-
-- **Для переключения режимов text/voice:** Используйте `initSession()` из хука `useSessionOptions`
+- `enableMicrophone()` запрашивает `getUserMedia()`, подменяет/создаёт аудио-трек в текущем `RTCPeerConnection`, заново формирует offer и отправляет его в OpenAI. После ответа сервера локальный поток добавляется в соединение, а Success callbacks (`onMicrophonePermissionGranted`, `onLocalStreamSetted` и т.д.) вызываются автоматически.
+- `disableMicrophone()` останавливает локальные аудио-треки, переключает аудио-трансивер в `recvonly`, повторно сигнализирует серверу и останавливает локальный поток. Success callbacks (`onHangUpStarted`/`onHangUpDone`) тоже задействуются.
+- Обе операции возвращают `Promise<void>` и требуют активного соединения плюс валидный `tokenProvider`. Отлавливайте исключения, чтобы показывать пользователю ошибки/подсказки.
+- Если микрофон недоступен и `allowConnectWithoutMic={false}`, `connect()` завершится ошибкой. При `allowConnectWithoutMic={true}` можно подключаться в текстовом режиме и включать микрофон позднее через `enableMicrophone()`.
 
 ### getNextTs() — утилита для ручной сортировки
 
@@ -779,6 +804,14 @@ const addCustomMessage = () => {
 - Синхронизация с внешними системами (например, websocket чат)
 - Дебаггинг и тестирование сортировки
 
+### Переключение режимов через ref
+
+Методы `switchToTextMode()` и `switchToVoiceMode()` обращаются к тому же механизму, что предоставляет `useSessionOptions`, поэтому их удобно вызывать из любого места, где доступен ref (push-уведомления, глобальные обработчики, Portal).
+
+- `getCurrentMode()` возвращает `'text'` или `'voice'`.
+- `getModeStatus()` показывает `'idle' | 'connecting' | 'connected' | 'disconnected'` для текущей инициализации режима.
+- Если DataChannel ещё не открыт, метод выбросит исключение. Отлавливайте ошибки и отображайте пользователю подсказку.
+
 **Примечание:** Подробнее о `ts` и `time` см. раздел "Контекст → Нормализация сообщений".
 
 ---
@@ -801,6 +834,7 @@ const addCustomMessage = () => {
 | **addMessage**       | **(AddableMessage \| AddableMessage[]) => string \| string[]**     | **Добавить ваши сообщения в локальную ленту. Возвращает ID созданного сообщения (или массив ID).** |
 | **clearAdded**       | **() => void**                                                     | **Очистить локальные UI-сообщения (не трогает ChatStore).**                                        |
 | **clearChatHistory** | **() => void**                                                     | **Очистить встроенный ChatStore (см. раздел "Встроенный чат").**                                   |
+| getNextTs            | () => number                                                       | Следующий порядковый `ts` для ручного добавления сообщений.                                        |
 
 ### Нормализация сообщений (addMessage)
 
@@ -1029,14 +1063,15 @@ function VolumeIndicator() {
 
 **Возвращаемые методы и состояния:**
 
-| Метод/Поле                   | Тип                                                       | Описание                               |
-| ---------------------------- | --------------------------------------------------------- | -------------------------------------- |
-| `initSession(mode)`          | `(mode: 'voice' \| 'text') => Promise<void>`              | Инициализация режима после подключения |
-| `isModeReady`                | `'idle' \| 'connecting' \| 'connected' \| 'disconnected'` | Статус готовности режима               |
-| `mode`                       | `'text' \| 'voice'`                                       | Текущий активный режим                 |
-| `cancelAssistantNow`         | `(onComplete?, onFail?) => Promise<void>`                 | Отмена текущего ответа ассистента      |
-| `handleSendMessage`          | `(text: string) => Promise<void>`                         | Отправка текстового сообщения          |
-| `subscribeToAssistantEvents` | `(onAssistantStarted?) => () => void`                     | Подписка на события ассистента         |
+| Метод/Поле                   | Тип                                                       | Описание                                               |
+| ---------------------------- | --------------------------------------------------------- | ------------------------------------------------------ |
+| `initSession(mode)`          | `(mode: 'voice' \| 'text') => Promise<void>`              | Инициализация режима после подключения                 |
+| `isModeReady`                | `'idle' \| 'connecting' \| 'connected' \| 'disconnected'` | Статус готовности режима                               |
+| `mode`                       | `'text' \| 'voice'`                                       | Текущий активный режим                                 |
+| `clientReady`                | `boolean`                                                 | Есть валидный клиент (можно дергать initSession/проч.) |
+| `cancelAssistantNow`         | `(onComplete?, onFail?) => Promise<void>`                 | Отмена текущего ответа ассистента                      |
+| `handleSendMessage`          | `(text: string) => Promise<void>`                         | Отправка текстового сообщения                          |
+| `subscribeToAssistantEvents` | `(onAssistantStarted?) => () => void`                     | Подписка на события ассистента                         |
 
 **Пример использования:**
 
@@ -1053,14 +1088,15 @@ function ChatScreen() {
     mode,
     cancelAssistantNow,
     handleSendMessage,
+    clientReady,
   } = useSessionOptions(client!);
 
   // ✅ КРИТИЧНО: Инициализация текстового режима при монтировании
   useEffect(() => {
-    if (status === 'connected' && isModeReady === 'idle') {
+    if (status === 'connected' && clientReady && isModeReady === 'idle') {
       initSession('text').catch(console.error);
     }
-  }, [status, isModeReady]);
+  }, [status, clientReady, isModeReady]);
 
   // Переключение в голосовой режим
   const enableVoice = async () => {
@@ -1139,6 +1175,7 @@ function ChatScreen() {
 
 **Важно:**
 
+- Дождитесь `clientReady === true` — это значит, что хук получил реальный экземпляр клиента и может управлять сессией.
 - Методы асинхронные, обрабатывайте try/catch
 - `initSession()` требует активного соединения (status='connected')
 - `initSession('text')` не отключает микрофон физически (треки остаются enabled)
@@ -1796,6 +1833,8 @@ new RealtimeClientClass(
 | --------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | connect()                                                       | Установить WebRTC, сделать SDP-обмен, открыть DataChannel.               |
 | disconnect()                                                    | Закрыть DataChannel/Media/Peer, почистить подписки и (по настройке) чат. |
+| enableMicrophone()                                              | Включить микрофон и выполнить повторную SDP-негоциацию.                  |
+| disableMicrophone()                                             | Отключить микрофон, остановить треки и обновить сессию без аудио.        |
 | sendRaw(event)                                                  | Отправить событие (через outgoingMiddleware).                            |
 | sendResponse(opts?)                                             | Обёртка над response.create.                                             |
 | sendResponseStrict({ instructions, modalities, conversation? }) | Строгая версия response.create.                                          |
@@ -1807,6 +1846,7 @@ new RealtimeClientClass(
 | onChatUpdate(fn)                                                | Подписка на обновления встроенного чата.                                 |
 | clearChatHistory()                                              | Очистить историю чата.                                                   |
 | isConnected()                                                   | Соединение установлено?                                                  |
+| isFullyConnected()                                              | И PeerConnection, и DataChannel в состоянии 'open'.                      |
 | getConnectionState()                                            | Текущий connectionState.                                                 |
 | getStatus()                                                     | Текущий connectionState (алиас).                                         |
 | getPeerConnection()                                             | RTCPeerConnection.                                                       |
@@ -1814,6 +1854,8 @@ new RealtimeClientClass(
 | getLocalStream()                                                | MediaStream (локальный).                                                 |
 | getRemoteStream()                                               | MediaStream (удалённый).                                                 |
 | getChat()                                                       | Текущая история встроенного чат-стора.                                   |
+
+> `isFullyConnected()` отличается от `isConnected()`: метод возвращает `true` только если `PeerConnection` перешёл в `connected`, DataChannel открыт (`readyState === 'open'`) и клиент не находится в процессе соединения.
 
 ### Concurrent Guards (защита от конкурентных вызовов)
 
@@ -2612,7 +2654,7 @@ type RealTimeClientProps = {
 };
 ```
 
-### RealtimeClientClass методы (полный список)
+### RealtimeClientClass методы
 
 ```ts
 class RealtimeClientClass {
